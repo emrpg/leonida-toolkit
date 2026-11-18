@@ -11,6 +11,7 @@ use tower_http::services::ServeDir;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::companion::{export_progress, get_checklist, import_progress, toggle_item};
 use crate::core_adapter::{
     parse_irl_status, CameraObs, CameraPose, Landmark, LandmarkFilter, LandmarkStats, LatLon,
     NearestLandmark, Prediction, Ray2D, RouteResult, Triangulation, WorldPoint,
@@ -20,6 +21,7 @@ use crate::db::{
     UpdateMarkerInput, UserMarker, MARKERS_SCHEMA,
 };
 use crate::error::AppError;
+use crate::rage::{export_handling, inspect_header, parse_handling};
 use crate::sol::{auth_api, get_media_files, submit_challenge};
 use crate::state::AppState;
 
@@ -66,6 +68,13 @@ pub fn build_router(state: AppState) -> Router {
             delete(delete_project_path),
         )
         .route("/api/route", get(plan_route))
+        .route("/api/companion/checklist", get(get_checklist))
+        .route("/api/companion/toggle", post(toggle_item))
+        .route("/api/companion/export", get(export_progress))
+        .route("/api/companion/import", post(import_progress))
+        .route("/api/rage/inspect-header", post(inspect_header))
+        .route("/api/rage/handling/parse", post(parse_handling))
+        .route("/api/rage/handling/export", post(export_handling))
         .route("/auth/api.php", get(auth_api).post(auth_api))
         .route("/api/sol/challenge/submit", post(submit_challenge))
         .route("/get-media-files.php", get(get_media_files))

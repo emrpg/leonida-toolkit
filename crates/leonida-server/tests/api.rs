@@ -577,6 +577,175 @@ async fn route_planning_endpoint() {
 }
 
 #[tokio::test]
+async fn companion_checklist_toggle_and_export_import() {
+    let app = test_app();
+
+    // Initial checklist
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/companion/checklist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cl = body_json(res).await;
+    let total = cl["stats"]["total"].as_u64().unwrap();
+    assert!(total >= 5);
+    assert_eq!(cl["stats"]["completed"], 0);
+
+    let first_id = cl["items"][0]["id"].as_str().unwrap().to_string();
+
+    // Toggle first item to completed=true
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/companion/toggle")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "id": first_id, "completed": true }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let toggled = body_json(res).await;
+    assert_eq!(toggled["completed"], true);
+    assert_eq!(toggled["stats"]["completed"], 1);
+
+    // Export progress
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/companion/export")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(res.headers().contains_key(header::CONTENT_DISPOSITION));
+    let exported = body_json(res).await;
+    assert_eq!(exported["schema"], "leonida-companion-v1");
+    assert_eq!(exported["completedIds"][0], first_id);
+
+    // Import additional completed item
+    let second_id = cl["items"][1]["id"].as_str().unwrap().to_string();
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/companion/import")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "schema": "leonida-companion-v1",
+                        "completedIds": [second_id]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let imp = body_json(res).await;
+    assert_eq!(imp["stats"]["completed"], 2);
+}
+
+#[tokio::test]
+async fn rage_inspect_header_and_handling_roundtrip() {
+    let app = test_app();
+
+    // RPF7 header: magic 52 50 46 37, entry_count=42, names_length=512, encryption=OPEN (4E 45 50 4F)
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/rage/inspect-header")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "hex": "52 50 46 37 00 00 00 2A 00 00 02 00 4E 45 50 4F" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rpf = body_json(res).await;
+    assert_eq!(rpf["format"], "RPF7");
+    assert_eq!(rpf["entryCount"], 42);
+    assert_eq!(rpf["namesLength"], 512);
+    assert_eq!(rpf["encryption"], "Open");
+
+    // RSC7 header: magic 52 53 43 37 ("RSC7" LE: 0x37435352), version=13, sys_flags=0x00020000, gfx_flags=0x00040000
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/rage/inspect-header")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "hex": "52534337 0D000000 00000200 00000400" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let rsc = body_json(res).await;
+    assert_eq!(rsc["format"], "RSC7");
+    assert_eq!(rsc["version"], 13);
+    assert!(rsc["systemSize"].as_u64().unwrap() > 0);
+
+    // handling.meta parse -> export roundtrip
+    let sample_xml = r#"<CHandlingDataMgr><HandlingData>
+        <Item type="CHandlingData">
+            <handlingName>CHEETAH</handlingName>
+            <fMass value="1300.0" />
+            <fInitialDragCoeff value="8.5" />
+            <fDriveBiasFront value="0.2" />
+            <nInitialDriveGears value="6" />
+            <fInitialDriveForce value="0.38" />
+            <fDriveMaxFlatVel value="175.0" />
+            <fBrakeForce value="1.1" />
+            <fTractionCurveMax value="2.6" />
+            <fSuspensionForce value="2.4" />
+        </Item>
+    </HandlingData></CHandlingDataMgr>"#;
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/rage/handling/parse")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "xml": sample_xml }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let parsed = body_json(res).await;
+    assert_eq!(parsed["items"][0]["handlingName"], "CHEETAH");
+    assert_eq!(parsed["items"][0]["nInitialDriveGears"], 6);
+
+    let res = app
+        .oneshot(
+            Request::post("/api/rage/handling/export")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "items": parsed["items"] }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let exported = body_json(res).await;
+    let xml_out = exported["xml"].as_str().unwrap();
+    assert!(xml_out.contains("<handlingName>CHEETAH</handlingName>"));
+    assert!(xml_out.contains("<fMass value=\"1300.000000\" />"));
+}
+
+#[tokio::test]
 async fn sol_auth_api_public_and_markers() {
     let app = test_app();
 

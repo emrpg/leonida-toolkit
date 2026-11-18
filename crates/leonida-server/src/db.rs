@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -124,6 +125,11 @@ impl MarkerStore {
                  pose_json TEXT,
                  frustum_json TEXT,
                  created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS companion_progress (
+                 id TEXT PRIMARY KEY,
+                 completed INTEGER NOT NULL DEFAULT 0,
                  updated_at INTEGER NOT NULL
              );",
         )
@@ -520,6 +526,69 @@ impl MarkerStore {
             params![id],
         )?;
         Ok(affected > 0)
+    }
+
+    pub fn get_companion_progress(&self) -> Result<HashMap<String, bool>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare("SELECT id, completed FROM companion_progress")?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let completed: i64 = row.get(1)?;
+            Ok((id, completed != 0))
+        })?;
+        let mut out = HashMap::new();
+        for row in rows {
+            let (id, completed) = row?;
+            out.insert(id, completed);
+        }
+        Ok(out)
+    }
+
+    pub fn set_companion_item(&self, id: &str, completed: Option<bool>) -> Result<bool> {
+        let now = now_unix_millis();
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let next = match completed {
+            Some(v) => v,
+            None => {
+                let current: Option<i64> = conn
+                    .query_row(
+                        "SELECT completed FROM companion_progress WHERE id = ?1",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                current.unwrap_or(0) == 0
+            }
+        };
+        conn.execute(
+            "INSERT INTO companion_progress (id, completed, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(id) DO UPDATE SET
+                 completed = excluded.completed,
+                 updated_at = excluded.updated_at",
+            params![id, i64::from(next), now],
+        )?;
+        Ok(next)
+    }
+
+    pub fn import_companion_progress(&self, entries: &[(String, bool)]) -> Result<usize> {
+        let now = now_unix_millis();
+        let mut conn = self.conn.lock().expect("marker db mutex poisoned");
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO companion_progress (id, completed, updated_at)
+                 VALUES (?1, ?2, ?3)
+                 ON CONFLICT(id) DO UPDATE SET
+                     completed = excluded.completed,
+                     updated_at = excluded.updated_at",
+            )?;
+            for (id, completed) in entries {
+                stmt.execute(params![id, i64::from(*completed), now])?;
+            }
+        }
+        tx.commit()?;
+        Ok(entries.len())
     }
 }
 
