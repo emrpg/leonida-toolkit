@@ -1,4 +1,5 @@
 mod sol;
+mod v04;
 
 use leonida_core::{
     build_irl_to_ig_model, filter_landmarks, landmark_stats, nearest_landmarks,
@@ -325,6 +326,65 @@ impl Default for SolDataset {
     }
 }
 
+/// Convert Leonida world `(x, y)` metres to Atlas SVG `(x, z)` coordinates.
+#[wasm_bindgen]
+pub fn world_to_svg(x: f64, y: f64) -> Vec<f64> {
+    v04::world_to_svg(x, y).to_vec()
+}
+
+/// Convert Atlas SVG `(sx, sz)` coordinates back to Leonida world `(x, y)` metres.
+#[wasm_bindgen]
+pub fn svg_to_world(sx: f64, sz: f64) -> Vec<f64> {
+    v04::svg_to_world(sx, sz).to_vec()
+}
+
+/// Solve 3D camera pose `(x, y, z, yaw_deg, pitch_deg, fov_deg, rmse_px)` from 3+ observations.
+#[wasm_bindgen]
+pub fn solve_camera_pose(
+    obs: JsValue,
+    width: f64,
+    height: f64,
+    fov_deg: Option<f64>,
+) -> Result<JsValue, JsValue> {
+    let parsed: Vec<v04::CameraObs> = from_js(obs)?;
+    match v04::solve_camera_pose(&parsed, width, height, fov_deg) {
+        Some(pose) => to_js(&pose),
+        None => Ok(JsValue::NULL),
+    }
+}
+
+/// Build a 2D camera frustum sector polygon (`Array<[x, y]>`) for map rendering.
+#[wasm_bindgen]
+pub fn frustum_polygon(
+    x: f64,
+    y: f64,
+    yaw_deg: f64,
+    fov_deg: f64,
+    range_m: f64,
+) -> Result<JsValue, JsValue> {
+    let poly = v04::frustum_polygon(x, y, yaw_deg, fov_deg, range_m);
+    to_js(&poly)
+}
+
+/// Plan a shortest-path route from `(x1, y1)` to `(x2, y2)` over a KNN graph of `nodes`.
+#[wasm_bindgen]
+pub fn plan_route(
+    nodes: JsValue,
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    k: Option<usize>,
+) -> Result<JsValue, JsValue> {
+    let parsed: Vec<WorldPoint> = if nodes.is_null() || nodes.is_undefined() {
+        Vec::new()
+    } else {
+        from_js(nodes)?
+    };
+    let route = v04::plan_route(&parsed, x1, y1, x2, y2, k.unwrap_or(6));
+    to_js(&route)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,5 +496,61 @@ mod tests {
         );
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "b1");
+    }
+
+    #[test]
+    fn v04_atlas_frustum_route_and_camera_pose() {
+        let svg = v04::world_to_svg(100.0, -50.0);
+        assert_eq!(svg, [200.0, 100.0]);
+        assert_eq!(v04::svg_to_world(svg[0], svg[1]), [100.0, -50.0]);
+
+        let poly = v04::frustum_polygon(0.0, 0.0, 0.0, 60.0, 500.0);
+        assert_eq!(poly.first(), Some(&[0.0, 0.0]));
+        assert_eq!(poly.last(), Some(&[0.0, 0.0]));
+        assert!(poly.len() >= 18);
+
+        let route = v04::plan_route(
+            &[
+                WorldPoint { x: 500.0, y: 0.0 },
+                WorldPoint {
+                    x: 1000.0,
+                    y: 500.0,
+                },
+            ],
+            0.0,
+            0.0,
+            1000.0,
+            1000.0,
+            4,
+        );
+        assert!(route.waypoints.len() >= 2);
+        assert!(route.distance_m >= 1000.0 * std::f64::consts::SQRT_2 - 1e-6);
+        assert!(route.drive_min > route.fly_min);
+
+        let obs = [
+            v04::CameraObs {
+                world_x: -100.0,
+                world_y: 500.0,
+                world_z: 10.0,
+                px: 418.3,
+                py: 360.0,
+            },
+            v04::CameraObs {
+                world_x: 0.0,
+                world_y: 500.0,
+                world_z: 50.0,
+                px: 640.0,
+                py: 271.32,
+            },
+            v04::CameraObs {
+                world_x: 120.0,
+                world_y: 600.0,
+                world_z: 20.0,
+                px: 861.7,
+                py: 341.52,
+            },
+        ];
+        let pose = v04::solve_camera_pose(&obs, 1280.0, 720.0, Some(60.0)).unwrap();
+        assert!(pose.rmse_px < 10.0);
     }
 }

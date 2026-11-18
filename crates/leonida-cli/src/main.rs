@@ -1,4 +1,5 @@
 mod sol;
+mod v04;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
@@ -108,6 +109,48 @@ enum Commands {
         /// Path to gta6map-landmarks.json
         #[arg(long)]
         data: Option<PathBuf>,
+    },
+    /// Plan a shortest-path route from (x1, y1) to (x2, y2) over the landmark KNN graph
+    Route {
+        /// Start X (world metres)
+        #[arg(allow_hyphen_values = true)]
+        x1: f64,
+        /// Start Y (world metres)
+        #[arg(allow_hyphen_values = true)]
+        y1: f64,
+        /// Goal X (world metres)
+        #[arg(allow_hyphen_values = true)]
+        x2: f64,
+        /// Goal Y (world metres)
+        #[arg(allow_hyphen_values = true)]
+        y2: f64,
+        /// Number of nearest neighbours per node
+        #[arg(short, long, default_value_t = 6)]
+        k: usize,
+        /// Path to gta6map-landmarks.json
+        #[arg(long)]
+        data: Option<PathBuf>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Solve 3D camera pose from 3+ photogrammetry observations (wx,wy,wz,px,py)
+    SolveCamera {
+        /// Image width in pixels
+        #[arg(long, default_value_t = 1280.0)]
+        width: f64,
+        /// Image height in pixels
+        #[arg(long, default_value_t = 720.0)]
+        height: f64,
+        /// Horizontal field of view in degrees
+        #[arg(long)]
+        fov: Option<f64>,
+        /// Observations formatted as world_x,world_y,world_z,px,py
+        #[arg(required = true, num_args = 3.., allow_hyphen_values = true)]
+        obs: Vec<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -526,7 +569,93 @@ fn main() -> Result<()> {
         Commands::ExportGeojson { out, data } => {
             run_export_geojson(out.as_deref(), data.as_deref())
         }
+        Commands::Route {
+            x1,
+            y1,
+            x2,
+            y2,
+            k,
+            data,
+            json,
+        } => run_route(x1, y1, x2, y2, k, data.as_deref(), json),
+        Commands::SolveCamera {
+            width,
+            height,
+            fov,
+            obs,
+            json,
+        } => run_solve_camera(width, height, fov, &obs, json),
     }
+}
+
+fn run_route(
+    x1: f64,
+    y1: f64,
+    x2: f64,
+    y2: f64,
+    k: usize,
+    data: Option<&Path>,
+    as_json: bool,
+) -> Result<()> {
+    let landmarks = load_landmarks(data)?;
+    let nodes: Vec<WorldPoint> = landmarks.into_iter().filter_map(|l| l.ig).collect();
+    let res = v04::plan_route(&nodes, x1, y1, x2, y2, k);
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&res)?);
+    } else {
+        println!(
+            "Route: {} waypoints, distance={:.1} m, drive={:.2} min, fly={:.2} min",
+            res.waypoints.len(),
+            res.distance_m,
+            res.drive_min,
+            res.fly_min
+        );
+    }
+    Ok(())
+}
+
+fn parse_camera_obs(spec: &str) -> Result<v04::CameraObs> {
+    let parts: Vec<&str> = spec.split(',').collect();
+    if parts.len() != 5 {
+        bail!("invalid observation '{spec}': expected world_x,world_y,world_z,px,py");
+    }
+    let parse_f = |idx: usize, name: &str| -> Result<f64> {
+        parts[idx]
+            .trim()
+            .parse()
+            .with_context(|| format!("invalid {name} in '{spec}'"))
+    };
+    Ok(v04::CameraObs {
+        world_x: parse_f(0, "world_x")?,
+        world_y: parse_f(1, "world_y")?,
+        world_z: parse_f(2, "world_z")?,
+        px: parse_f(3, "px")?,
+        py: parse_f(4, "py")?,
+    })
+}
+
+fn run_solve_camera(
+    width: f64,
+    height: f64,
+    fov: Option<f64>,
+    obs_specs: &[String],
+    as_json: bool,
+) -> Result<()> {
+    let obs: Vec<v04::CameraObs> = obs_specs
+        .iter()
+        .map(|s| parse_camera_obs(s))
+        .collect::<Result<_>>()?;
+    let pose = v04::solve_camera_pose(&obs, width, height, fov)
+        .context("failed to solve camera pose (need >= 3 valid observations)")?;
+    if as_json {
+        println!("{}", serde_json::to_string_pretty(&pose)?);
+    } else {
+        println!(
+            "CameraPose: ({:.2}, {:.2}, {:.2}) yaw={:.2}° pitch={:.2}° fov={:.1}° rmse={:.2} px",
+            pose.x, pose.y, pose.z, pose.yaw_deg, pose.pitch_deg, pose.fov_deg, pose.rmse_px
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -691,5 +820,42 @@ mod tests {
         assert_eq!(markers.as_array().unwrap().len(), 3);
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parse_route_and_solve_camera_cli() {
+        let cli =
+            Cli::try_parse_from(["leonida", "route", "-100", "200", "500", "-300", "-k", "5"])
+                .expect("should parse negative route coords");
+        match cli.command {
+            Commands::Route {
+                x1, y1, x2, y2, k, ..
+            } => {
+                assert_eq!((x1, y1, x2, y2, k), (-100.0, 200.0, 500.0, -300.0, 5));
+            }
+            _ => panic!("expected Route"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "leonida",
+            "solve-camera",
+            "--width",
+            "1280",
+            "--height",
+            "720",
+            "-100,500,10,418.3,360",
+            "0,500,50,640,271.32",
+            "120,600,20,861.7,341.52",
+        ])
+        .expect("should parse solve-camera");
+        match cli.command {
+            Commands::SolveCamera { obs, .. } => {
+                let parsed: Vec<v04::CameraObs> =
+                    obs.iter().map(|s| parse_camera_obs(s).unwrap()).collect();
+                let pose = v04::solve_camera_pose(&parsed, 1280.0, 720.0, Some(60.0)).unwrap();
+                assert!(pose.rmse_px < 10.0);
+            }
+            _ => panic!("expected SolveCamera"),
+        }
     }
 }
