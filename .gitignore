@@ -2,5 +2,6 @@ node_modules
 dist
 apps/map/public/tiles
 apps/map/public/data
+data/*.db*
 *.log
 target
