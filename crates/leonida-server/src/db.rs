@@ -173,6 +173,27 @@ impl MarkerStore {
                  name TEXT NOT NULL,
                  note TEXT NOT NULL DEFAULT '',
                  created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS marker_comments (
+                 id TEXT PRIMARY KEY,
+                 marker_id TEXT NOT NULL,
+                 author TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_marker_comments_marker_id
+                 ON marker_comments (marker_id, created_at DESC);
+             CREATE TABLE IF NOT EXISTS sol_news (
+                 id TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 author TEXT NOT NULL,
+                 published_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sol_kv_store (
+                 key TEXT PRIMARY KEY,
+                 value_json TEXT NOT NULL,
+                 updated_at INTEGER NOT NULL
              );",
         )
         .context("initialize sqlite schema")?;
@@ -187,6 +208,21 @@ impl MarkerStore {
                     "welcome-v03",
                     "State of Leonida v0.3",
                     "Interactive map, media archive, and Screenshot Challenge are live.",
+                    now_unix_millis()
+                ],
+            )?;
+        }
+
+        let news_count: i64 = conn.query_row("SELECT COUNT(*) FROM sol_news", [], |r| r.get(0))?;
+        if news_count == 0 {
+            conn.execute(
+                "INSERT INTO sol_news (id, title, body, author, published_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    "news-v08",
+                    "State of Leonida v0.8 Map Studio",
+                    "Heatmap, Marker Motion, Landmark Discussions, and Admin Studio are now live.",
+                    "Leonida Team",
                     now_unix_millis()
                 ],
             )?;
@@ -973,6 +1009,310 @@ impl MarkerStore {
         )?;
         Ok(affected > 0)
     }
+
+    pub fn list_marker_comments(&self, marker_id: &str) -> Result<Vec<MarkerComment>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, marker_id, author, body, created_at
+             FROM marker_comments WHERE marker_id = ?1
+             ORDER BY created_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map(params![marker_id], |row| {
+            Ok(MarkerComment {
+                id: row.get(0)?,
+                marker_id: row.get(1)?,
+                author: row.get(2)?,
+                body: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn post_marker_comment(
+        &self,
+        marker_id: &str,
+        author: &str,
+        body: &str,
+    ) -> Result<MarkerComment> {
+        let comment = MarkerComment {
+            id: Uuid::new_v4().to_string(),
+            marker_id: marker_id.to_string(),
+            author: author.to_string(),
+            body: body.to_string(),
+            created_at: now_unix_millis(),
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO marker_comments (id, marker_id, author, body, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                comment.id,
+                comment.marker_id,
+                comment.author,
+                comment.body,
+                comment.created_at
+            ],
+        )?;
+        Ok(comment)
+    }
+
+    pub fn marker_discussion_stats(&self) -> Result<MarkerDiscussionStats> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let total_comments: i64 =
+            conn.query_row("SELECT COUNT(*) FROM marker_comments", [], |r| r.get(0))?;
+        let discussed_markers: i64 = conn.query_row(
+            "SELECT COUNT(DISTINCT marker_id) FROM marker_comments",
+            [],
+            |r| r.get(0),
+        )?;
+        let mut stmt = conn.prepare(
+            "SELECT marker_id, COUNT(*) as cnt
+             FROM marker_comments GROUP BY marker_id ORDER BY cnt DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(MarkerCommentCount {
+                marker_id: row.get(0)?,
+                count: row.get::<_, i64>(1)?.max(0) as usize,
+            })
+        })?;
+        let mut by_marker = Vec::new();
+        for row in rows {
+            by_marker.push(row?);
+        }
+        Ok(MarkerDiscussionStats {
+            total_comments: total_comments.max(0) as usize,
+            discussed_markers: discussed_markers.max(0) as usize,
+            by_marker,
+        })
+    }
+
+    pub fn list_news(&self) -> Result<Vec<SolNewsItem>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, title, body, author, published_at
+             FROM sol_news ORDER BY published_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SolNewsItem {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                body: row.get(2)?,
+                author: row.get(3)?,
+                published_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_news(
+        &self,
+        id: Option<String>,
+        title: String,
+        body: String,
+        author: String,
+    ) -> Result<SolNewsItem> {
+        let item = SolNewsItem {
+            id: id
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            title,
+            body,
+            author,
+            published_at: now_unix_millis(),
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO sol_news (id, title, body, author, published_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+                 title = excluded.title,
+                 body = excluded.body,
+                 author = excluded.author,
+                 published_at = excluded.published_at",
+            params![
+                item.id,
+                item.title,
+                item.body,
+                item.author,
+                item.published_at
+            ],
+        )?;
+        Ok(item)
+    }
+
+    pub fn get_kv(&self, key: &str) -> Result<Option<Value>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value_json FROM sol_kv_store WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(raw.and_then(|s| serde_json::from_str(&s).ok()))
+    }
+
+    pub fn set_kv(&self, key: &str, value: &Value) -> Result<()> {
+        let raw = serde_json::to_string(value)?;
+        let now = now_unix_millis();
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO sol_kv_store (key, value_json, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(key) DO UPDATE SET
+                 value_json = excluded.value_json,
+                 updated_at = excluded.updated_at",
+            params![key, raw, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn admin_db_overview(&self) -> Result<Vec<AdminTableStat>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             ORDER BY name ASC",
+        )?;
+        let names: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        let mut tables = Vec::with_capacity(names.len());
+        for name in names {
+            let safe_name = name.replace('"', "\"\"");
+            let count: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM \"{safe_name}\""), [], |r| {
+                    r.get(0)
+                })?;
+            tables.push(AdminTableStat {
+                name,
+                row_count: count.max(0) as usize,
+            });
+        }
+        Ok(tables)
+    }
+
+    pub fn admin_db_integrity(&self) -> Result<Vec<String>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare("PRAGMA integrity_check")?;
+        let checks = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(checks)
+    }
+
+    pub fn admin_stats(&self) -> Result<AdminStats> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let count = |table: &str| -> Result<usize> {
+            let c: i64 =
+                conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))?;
+            Ok(c.max(0) as usize)
+        };
+        Ok(AdminStats {
+            markers_count: count("user_markers")?,
+            comments_count: count("marker_comments")?,
+            leaderboard_count: count("sol_leaderboard")?,
+            projects_count: count("photogrammetry_projects")?,
+            notes_count: count("phone_notes")?,
+            photos_count: count("phone_photos")?,
+            bookmarks_count: count("native_bookmarks")?,
+            news_count: count("sol_news")?,
+        })
+    }
+
+    pub fn admin_users(&self) -> Result<Vec<AdminUserSummary>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT player, COUNT(*), MAX(score) FROM sol_leaderboard GROUP BY player ORDER BY MAX(score) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AdminUserSummary {
+                name: row.get(0)?,
+                role: "Explorer".to_string(),
+                plays: row.get::<_, i64>(1)?.max(0) as usize,
+                best_score: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkerComment {
+    pub id: String,
+    pub marker_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkerCommentCount {
+    pub marker_id: String,
+    pub count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkerDiscussionStats {
+    pub total_comments: usize,
+    pub discussed_markers: usize,
+    pub by_marker: Vec<MarkerCommentCount>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolNewsItem {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub author: String,
+    pub published_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminTableStat {
+    pub name: String,
+    pub row_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminStats {
+    pub markers_count: usize,
+    pub comments_count: usize,
+    pub leaderboard_count: usize,
+    pub projects_count: usize,
+    pub notes_count: usize,
+    pub photos_count: usize,
+    pub bookmarks_count: usize,
+    pub news_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdminUserSummary {
+    pub name: String,
+    pub role: String,
+    pub plays: usize,
+    pub best_score: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

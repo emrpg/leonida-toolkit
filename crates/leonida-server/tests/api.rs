@@ -1396,3 +1396,165 @@ async fn natives_search_stats_bookmarks_and_static_hosting() {
 
     let _ = std::fs::remove_dir_all(&base);
 }
+
+#[tokio::test]
+async fn sol_marker_discussion_and_save_changelog() {
+    let app = test_app();
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=marker_discussion_post")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "markerId": "b1",
+                        "author": "Lucia",
+                        "body": "Confirmed oceanfront hotel facade."
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let posted = body_json(res).await;
+    assert_eq!(posted["comment"]["markerId"], "b1");
+    assert_eq!(posted["comment"]["author"], "Lucia");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/auth/api.php?action=marker_discussion_list&marker_id=b1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let list = body_json(res).await;
+    assert_eq!(list["comments"].as_array().unwrap().len(), 1);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/auth/api.php?action=marker_discussion_stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let stats = body_json(res).await;
+    assert_eq!(stats["totalComments"], 1);
+    assert_eq!(stats["discussedMarkers"], 1);
+
+    let res = app
+        .oneshot(
+            Request::post("/save-changelog.php")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!([{ "version": "0.8.0", "note": "Added discussion & admin studio" }])
+                        .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let cl = body_json(res).await;
+    assert_eq!(cl["saved"], true);
+}
+
+#[tokio::test]
+async fn sol_admin_studio_endpoints() {
+    let app = test_app();
+
+    // Seed one challenge score so admin_users has an entry
+    let _ = app
+        .clone()
+        .oneshot(
+            Request::post("/api/sol/challenge/submit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "player": "Jason",
+                        "targetX": 100.0,
+                        "targetY": 100.0,
+                        "guessX": 100.0,
+                        "guessY": 100.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    for action in [
+        "admin_stats",
+        "admin_db_overview",
+        "admin_db_integrity",
+        "admin_db_export",
+        "admin_news",
+        "admin_site_settings",
+        "admin_credits",
+        "admin_ranks",
+        "admin_users",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/auth/api.php?action={action}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "admin action {action} failed");
+        assert_eq!(body_json(res).await["ok"], true);
+    }
+
+    // Save news
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=admin_news_save")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "title": "Patch 0.8", "body": "All systems operational." }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["item"]["title"], "Patch 0.8");
+
+    // Save site settings and read back
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=admin_site_settings_save")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "accentColor": "#00f5d4", "panelStyle": "solid" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .oneshot(
+            Request::get("/auth/api.php?action=admin_site_settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["settings"]["accentColor"], "#00f5d4");
+}

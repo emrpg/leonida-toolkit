@@ -31,7 +31,7 @@ use crate::phone::{
     save_photo,
 };
 use crate::rage::{export_handling, inspect_header, parse_handling};
-use crate::sol::{auth_api, get_media_files, submit_challenge};
+use crate::sol::{auth_api, get_media_files, save_changelog, submit_challenge};
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
@@ -121,6 +121,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/auth/api.php", get(auth_api).post(auth_api))
         .route("/api/sol/challenge/submit", post(submit_challenge))
         .route("/get-media-files.php", get(get_media_files))
+        .route("/save-changelog.php", post(save_changelog))
         .nest_service("/tiles", tiles_service)
         .nest_service("/data", data_service)
         .nest_service("/phone", phone_service)
