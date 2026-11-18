@@ -9,6 +9,7 @@ pub mod coords;
 pub mod error;
 pub mod geo;
 pub mod landmarks;
+pub mod natives;
 pub mod phone;
 pub mod photogrammetry;
 pub mod rage;
@@ -34,6 +35,9 @@ pub use landmarks::{
     id_sort_key, landmark_stats, parse_gta6map_tuple, parse_gtamaplib_vc, Gta6MapTuple,
     GtamaplibVcEntry, GtamaplibVcFile, IrlStatus, Landmark, Landmark3D, LandmarkStats,
     StatusCounts,
+};
+pub use natives::{
+    filter_natives, generate_shv_stub, native_stats, NativeEntry, NativeNamespaceStat, NativeParam,
 };
 pub use phone::{
     default_phone_contacts, filter_photos_by_district, messages_for_contact, phone_stats,
