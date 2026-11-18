@@ -422,6 +422,161 @@ async fn static_dist_and_tiles_with_cache_headers() {
 }
 
 #[tokio::test]
+async fn photogrammetry_solve_and_projects_crud() {
+    let app = test_app();
+
+    // Known camera at (0, 0, 100), yaw=0 (north +y), pitch=0, fov=60 deg, 1280x720
+    // fl = 640 / tan(30 deg) = 1108.5125168440814
+    let fl = 640.0_f64 / 30.0_f64.to_radians().tan();
+    let pts = [
+        (-200.0, 1000.0, 150.0),
+        (250.0, 1200.0, 80.0),
+        (0.0, 800.0, 200.0),
+        (150.0, 900.0, 40.0),
+    ];
+    let obs: Vec<Value> = pts
+        .iter()
+        .map(|&(wx, wy, wz)| {
+            let u = 640.0 + fl * (wx / wy);
+            let v = 360.0 - fl * ((wz - 100.0) / wy);
+            json!({ "worldX": wx, "worldY": wy, "worldZ": wz, "px": u, "py": v })
+        })
+        .collect();
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/photogrammetry/solve")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "observations": obs,
+                        "width": 1280.0,
+                        "height": 720.0,
+                        "fovDeg": 60.0,
+                        "rangeM": 1200.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let solved = body_json(res).await;
+    assert!(solved["pose"]["rmsePx"].as_f64().unwrap() < 2.0);
+    assert!(solved["frustum"].as_array().unwrap().len() >= 18);
+
+    // Fewer than 3 observations -> 400
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/photogrammetry/solve")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "observations": [obs[0], obs[1]],
+                        "width": 1280.0,
+                        "height": 720.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    // Save project to SQLite
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/photogrammetry/projects")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "name": "Vice Beach Calibration",
+                        "imageName": "trailer1_frame42.png",
+                        "width": 1280.0,
+                        "height": 720.0,
+                        "observations": obs,
+                        "pose": solved["pose"],
+                        "frustum": solved["frustum"]
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let saved = body_json(res).await;
+    let proj_id = saved["project"]["id"].as_str().unwrap().to_string();
+    assert_eq!(saved["project"]["name"], "Vice Beach Calibration");
+
+    // List projects
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/photogrammetry/projects")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let list = body_json(res).await;
+    assert_eq!(list["projects"].as_array().unwrap().len(), 1);
+
+    // Delete by query param
+    let res = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/photogrammetry/projects?id={proj_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["deleted"], true);
+
+    // Deleting again by path -> 404
+    let res = app
+        .oneshot(
+            Request::delete(format!("/api/photogrammetry/projects/{proj_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn route_planning_endpoint() {
+    let app = test_app();
+
+    let res = app
+        .oneshot(
+            Request::get("/api/route?x1=1000&y1=2000&x2=1460&y2=2655")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let route = body_json(res).await;
+    let wps = route["waypoints"].as_array().unwrap();
+    assert!(wps.len() >= 2);
+    assert_eq!(wps[0], json!([1000.0, 2000.0]));
+    assert_eq!(wps[wps.len() - 1], json!([1460.0, 2655.0]));
+    assert!(route["distanceM"].as_f64().unwrap() > 0.0);
+    assert!(route["driveMin"].as_f64().unwrap() > 0.0);
+    assert!(route["flyMin"].as_f64().unwrap() > 0.0);
+}
+
+#[tokio::test]
 async fn sol_auth_api_public_and_markers() {
     let app = test_app();
 

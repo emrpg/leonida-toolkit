@@ -5,7 +5,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
+
+use crate::core_adapter::{CameraObs, CameraPose};
 
 pub const MARKERS_SCHEMA: &str = "leonida-user-markers-v1";
 
@@ -110,6 +113,18 @@ impl MarkerStore {
                  body TEXT NOT NULL,
                  read INTEGER NOT NULL DEFAULT 0,
                  created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS photogrammetry_projects (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 image_name TEXT,
+                 width REAL NOT NULL,
+                 height REAL NOT NULL,
+                 observations_json TEXT NOT NULL,
+                 pose_json TEXT,
+                 frustum_json TEXT,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
              );",
         )
         .context("initialize sqlite schema")?;
@@ -401,6 +416,143 @@ impl MarkerStore {
             avg_distance_m: avg_distance_m.unwrap_or(0.0),
         })
     }
+
+    pub fn list_projects(&self) -> Result<Vec<PhotogrammetryProject>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, name, image_name, width, height, observations_json, pose_json, frustum_json, created_at, updated_at
+             FROM photogrammetry_projects
+             ORDER BY updated_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let obs_raw: String = row.get(5)?;
+            let pose_raw: Option<String> = row.get(6)?;
+            let frustum_raw: Option<String> = row.get(7)?;
+            Ok(PhotogrammetryProject {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                image_name: row.get(2)?,
+                width: row.get(3)?,
+                height: row.get(4)?,
+                observations: serde_json::from_str(&obs_raw).unwrap_or_default(),
+                pose: pose_raw.and_then(|s| serde_json::from_str(&s).ok()),
+                frustum: frustum_raw.and_then(|s| serde_json::from_str(&s).ok()),
+                created_at: row.get(8)?,
+                updated_at: row.get(9)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_project(&self, input: SaveProjectInput) -> Result<PhotogrammetryProject> {
+        let now = now_unix_millis();
+        let id = input
+            .id
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let obs_json = serde_json::to_string(&input.observations)?;
+        let pose_json = input.pose.as_ref().map(serde_json::to_string).transpose()?;
+        let frustum_json = input
+            .frustum
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let existing_created: Option<i64> = conn
+            .query_row(
+                "SELECT created_at FROM photogrammetry_projects WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let created_at = existing_created.unwrap_or(now);
+
+        conn.execute(
+            "INSERT INTO photogrammetry_projects (
+                 id, name, image_name, width, height, observations_json, pose_json, frustum_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 image_name = excluded.image_name,
+                 width = excluded.width,
+                 height = excluded.height,
+                 observations_json = excluded.observations_json,
+                 pose_json = excluded.pose_json,
+                 frustum_json = excluded.frustum_json,
+                 updated_at = excluded.updated_at",
+            params![
+                id,
+                input.name,
+                input.image_name,
+                input.width,
+                input.height,
+                obs_json,
+                pose_json,
+                frustum_json,
+                created_at,
+                now
+            ],
+        )?;
+
+        Ok(PhotogrammetryProject {
+            id,
+            name: input.name,
+            image_name: input.image_name,
+            width: input.width,
+            height: input.height,
+            observations: input.observations,
+            pose: input.pose,
+            frustum: input.frustum,
+            created_at,
+            updated_at: now,
+        })
+    }
+
+    pub fn delete_project(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let affected = conn.execute(
+            "DELETE FROM photogrammetry_projects WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(affected > 0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhotogrammetryProject {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_name: Option<String>,
+    pub width: f64,
+    pub height: f64,
+    pub observations: Vec<CameraObs>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pose: Option<CameraPose>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frustum: Option<Value>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectInput {
+    pub id: Option<String>,
+    pub name: String,
+    #[serde(alias = "image_name")]
+    pub image_name: Option<String>,
+    pub width: f64,
+    pub height: f64,
+    pub observations: Vec<CameraObs>,
+    pub pose: Option<CameraPose>,
+    pub frustum: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
