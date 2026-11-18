@@ -8,14 +8,16 @@ pub mod coords;
 pub mod error;
 pub mod geo;
 pub mod landmarks;
+pub mod photogrammetry;
+pub mod routing;
 pub mod search;
 pub mod sol;
 pub mod tiles;
 
 pub use coords::{
     bearing, bearing_to_vector, distance, distance3, format_distance, format_world, path_length,
-    polygon_area, AtlasFrame, CanonicalBounds, CanonicalPoint, LatLon, SvgPoint, WorldExtent,
-    WorldPoint, WorldPoint3, WORLD_EXTENT,
+    polygon_area, svg_to_world, world_to_svg, AtlasFrame, CanonicalBounds, CanonicalPoint, LatLon,
+    SvgPoint, WorldExtent, WorldPoint, WorldPoint3, WORLD_EXTENT,
 };
 pub use error::CoreError;
 pub use geo::{
@@ -28,6 +30,10 @@ pub use landmarks::{
     GtamaplibVcEntry, GtamaplibVcFile, IrlStatus, Landmark, Landmark3D, LandmarkStats,
     StatusCounts,
 };
+pub use photogrammetry::{
+    frustum_polygon, project_world_to_pixel, solve_camera_pose, CameraObs, CameraPose,
+};
+pub use routing::{plan_route, plan_route_from_landmarks, RouteResult};
 pub use search::{
     filter_landmarks, nearest_landmarks, to_geojson, GeoJsonCrs, GeoJsonCrsProperties,
     GeoJsonFeature, GeoJsonFeatureCollection, GeoJsonLandmarkProperties, GeoJsonPointGeometry,

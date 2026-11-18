@@ -183,3 +183,13 @@ impl AtlasFrame {
         }
     }
 }
+
+/// Convert Leonida world `(x, y)` metres to Atlas SVG/3D XZ `(sx, sz)` coordinates.
+pub fn world_to_svg(x: f64, y: f64) -> (f64, f64) {
+    (x * 2.0, -y * 2.0)
+}
+
+/// Convert Atlas SVG/3D XZ `(sx, sz)` coordinates back to Leonida world `(x, y)` metres.
+pub fn svg_to_world(sx: f64, sz: f64) -> (f64, f64) {
+    (sx / 2.0, -sz / 2.0)
+}
