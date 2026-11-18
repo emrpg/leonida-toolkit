@@ -823,6 +823,7 @@ mod tests {
             "backgrounds.json",
             "lang.json",
             "seo.json",
+            "wiki-cache.json",
         ] {
             assert!(out.join(name).exists(), "missing {name}");
         }

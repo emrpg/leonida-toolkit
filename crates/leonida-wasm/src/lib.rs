@@ -2,6 +2,7 @@ mod natives;
 mod rage;
 mod sol;
 mod v04;
+mod v08;
 
 use leonida_core::{
     build_irl_to_ig_model, filter_landmarks, landmark_stats, nearest_landmarks,
@@ -482,6 +483,24 @@ pub fn native_stats(entries: JsValue) -> Result<JsValue, JsValue> {
     to_js(&stats)
 }
 
+/// Aggregate world `(x, y)` points into normalised heatmap grid cells (`0.0..=1.0`).
+#[wasm_bindgen]
+pub fn compute_heatmap_cells(points: JsValue, cell_size: Option<f64>) -> Result<JsValue, JsValue> {
+    let parsed: Vec<v08::HeatPoint> = from_js(points)?;
+    let cells = v08::compute_heatmap_cells(&parsed, cell_size.unwrap_or(500.0));
+    to_js(&cells)
+}
+
+/// Interpolate a smooth position and compass bearing along a polyline at progress `t` in `[0, 1]`.
+#[wasm_bindgen]
+pub fn interpolate_motion_path(points: JsValue, t: f64) -> Result<JsValue, JsValue> {
+    let parsed: Vec<v08::HeatPoint> = from_js(points)?;
+    match v08::interpolate_motion_path(&parsed, t) {
+        Some(sample) => to_js(&sample),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,5 +733,38 @@ mod tests {
         assert!(cs.contains("Function.Call<bool>((Hash)0xF297383AA91DCA29, player, ped)"));
         let rs = natives::generate_shv_stub(&entry, "rust").unwrap();
         assert!(rs.contains("shv_invoke::<bool>(0xF297383AA91DCA29"));
+    }
+
+    #[test]
+    fn v08_heatmap_and_motion_path() {
+        let pts = [
+            v08::HeatPoint { x: 100.0, y: 100.0 },
+            v08::HeatPoint { x: 200.0, y: 200.0 },
+            v08::HeatPoint {
+                x: 1200.0,
+                y: 100.0,
+            },
+        ];
+        let cells = v08::compute_heatmap_cells(&pts, 500.0);
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[0].count, 2);
+        assert!((cells[0].weight - 1.0).abs() < 1e-9);
+        assert_eq!(cells[1].count, 1);
+        assert!((cells[1].weight - 0.5).abs() < 1e-9);
+
+        let path = [
+            v08::HeatPoint { x: 0.0, y: 0.0 },
+            v08::HeatPoint { x: 0.0, y: 100.0 },
+            v08::HeatPoint { x: 100.0, y: 100.0 },
+        ];
+        let mid = v08::interpolate_motion_path(&path, 0.25).unwrap();
+        assert!((mid.x - 0.0).abs() < 1e-9);
+        assert!((mid.y - 50.0).abs() < 1e-9);
+        assert!((mid.bearing - 0.0).abs() < 1e-9);
+
+        let end_leg = v08::interpolate_motion_path(&path, 0.75).unwrap();
+        assert!((end_leg.x - 50.0).abs() < 1e-9);
+        assert!((end_leg.y - 100.0).abs() < 1e-9);
+        assert!((end_leg.bearing - 90.0).abs() < 1e-9);
     }
 }

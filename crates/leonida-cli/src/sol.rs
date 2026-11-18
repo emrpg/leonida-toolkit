@@ -316,15 +316,51 @@ pub fn run_build_sol_data(root: &Path) -> Result<()> {
     });
     write_json(&out_dir.join("seo.json"), &seo)?;
 
+    let wiki_entries: Vec<serde_json::Value> = landmarks
+        .iter()
+        .filter_map(|l| {
+            let ig = l.ig?;
+            let district = l.district.as_deref().unwrap_or("Leonida");
+            let real_world = if l.irl_address.is_empty() || l.irl_address == "?" {
+                None
+            } else {
+                Some(l.irl_address.as_str())
+            };
+            let summary = match real_world {
+                Some(rw) => format!(
+                    "{} is a mapped landmark in {} ({:.0}, {:.0}), calibrated against {}.",
+                    l.name, district, ig.x, ig.y, rw
+                ),
+                None => format!(
+                    "{} is a mapped landmark in {} ({:.0}, {:.0}).",
+                    l.name, district, ig.x, ig.y
+                ),
+            };
+            Some(serde_json::json!({
+                "id": l.id,
+                "title": l.name,
+                "district": district,
+                "summary": summary,
+                "tags": l.tags,
+                "realWorld": real_world,
+                "status": status_str(l.irl_status),
+                "x": ig.x,
+                "y": ig.y,
+            }))
+        })
+        .collect();
+    write_json(&out_dir.join("wiki-cache.json"), &wiki_entries)?;
+
     println!(
-        "[build-sol-data] markers={} trailer1={} trailer2={} trailer3={} leaks={} screenshots={} el_screenshots={}",
+        "[build-sol-data] markers={} trailer1={} trailer2={} trailer3={} leaks={} screenshots={} el_screenshots={} wiki_cache={}",
         markers.len(),
         trailer1.len(),
         trailer2.len(),
         trailer3.len(),
         leaks.len(),
         screenshots.len(),
-        el_screenshots.len()
+        el_screenshots.len(),
+        wiki_entries.len()
     );
     Ok(())
 }
