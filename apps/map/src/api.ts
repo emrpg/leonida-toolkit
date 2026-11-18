@@ -480,6 +480,32 @@ function saveLocalProjects(items: PhotogrammetryProject[]): void {
   }
 }
 
+function fromServerPose(
+  p: CameraPose & { yawDeg?: number; pitchDeg?: number; fovDeg?: number; rmsePx?: number },
+): CameraPose {
+  return {
+    x: p.x,
+    y: p.y,
+    z: p.z,
+    yaw_deg: p.yaw_deg ?? p.yawDeg ?? 0,
+    pitch_deg: p.pitch_deg ?? p.pitchDeg ?? 0,
+    fov_deg: p.fov_deg ?? p.fovDeg ?? 60,
+    rmse_px: p.rmse_px ?? p.rmsePx ?? 0,
+  };
+}
+
+function toServerPose(p: CameraPose) {
+  return {
+    x: p.x,
+    y: p.y,
+    z: p.z,
+    yawDeg: p.yaw_deg,
+    pitchDeg: p.pitch_deg,
+    fovDeg: p.fov_deg,
+    rmsePx: p.rmse_px,
+  };
+}
+
 export async function solveCameraPoseRemote(
   observations: CameraObs[],
   width: number,
@@ -487,14 +513,15 @@ export async function solveCameraPoseRemote(
   fov_deg = 60,
 ): Promise<{ pose: CameraPose; frustum?: [number, number][] } | null> {
   try {
-    return await fetchJson<{ pose: CameraPose; frustum?: [number, number][] }>(
-      '/api/photogrammetry/solve',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ observations, width, height, fov_deg }),
-      },
-    );
+    const res = await fetchJson<{
+      pose: CameraPose & { yawDeg?: number; pitchDeg?: number; fovDeg?: number; rmsePx?: number };
+      frustum?: [number, number][];
+    }>('/api/photogrammetry/solve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ observations, width, height, fov_deg }),
+    });
+    return { pose: fromServerPose(res.pose), frustum: res.frustum };
   } catch {
     return null;
   }
@@ -503,7 +530,14 @@ export async function solveCameraPoseRemote(
 export async function listPhotogrammetryProjects(): Promise<PhotogrammetryProject[]> {
   try {
     const raw = await fetchJson<unknown>('/api/photogrammetry/projects');
-    const arr = unwrapArray<PhotogrammetryProject>(raw, ['projects', 'items', 'data']);
+    const arr = unwrapArray<
+      PhotogrammetryProject & {
+        pose?: CameraPose & { yawDeg?: number; pitchDeg?: number; fovDeg?: number; rmsePx?: number };
+      }
+    >(raw, ['projects', 'items', 'data']).map((pr) => ({
+      ...pr,
+      pose: pr.pose ? fromServerPose(pr.pose) : undefined,
+    }));
     if (Array.isArray(raw) || (raw && typeof raw === 'object' && 'projects' in raw)) {
       saveLocalProjects(arr);
       return arr;
@@ -528,7 +562,16 @@ export async function savePhotogrammetryProject(
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(localItem),
+        body: JSON.stringify({
+          id: localItem.id,
+          name: localItem.name,
+          image_name: localItem.image_name,
+          width: localItem.width,
+          height: localItem.height,
+          observations: localItem.observations,
+          pose: localItem.pose ? toServerPose(localItem.pose) : undefined,
+          frustum: localItem.frustum,
+        }),
       },
     );
     const saved = 'project' in res && res.project ? res.project : (res as PhotogrammetryProject);
@@ -566,9 +609,17 @@ export async function fetchRouteRemote(
   y2: number,
 ): Promise<RouteResult | null> {
   try {
-    return await fetchJson<RouteResult>(
+    const raw = await fetchJson<
+      RouteResult & { distanceM?: number; driveMin?: number; flyMin?: number }
+    >(
       `/api/route?x1=${encodeURIComponent(x1)}&y1=${encodeURIComponent(y1)}&x2=${encodeURIComponent(x2)}&y2=${encodeURIComponent(y2)}`,
     );
+    return {
+      waypoints: raw.waypoints ?? [],
+      distance_m: raw.distance_m ?? raw.distanceM ?? 0,
+      drive_min: raw.drive_min ?? raw.driveMin ?? 0,
+      fly_min: raw.fly_min ?? raw.flyMin ?? 0,
+    };
   } catch {
     return null;
   }
