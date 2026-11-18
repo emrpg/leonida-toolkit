@@ -1,11 +1,9 @@
-mod model;
-
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use model::{
+use leonida_core::{
     build_irl_to_ig_model, filter_landmarks, landmark_stats, parse_gta6map_tuple, predict_ig,
-    to_geojson, triangulate, Gta6MapTuple, IrlStatus, Landmark, LandmarkFilter, LatLon, Ray2D,
-    WorldPoint,
+    to_geojson, triangulate, Anchor, Gta6MapTuple, IrlStatus, Landmark, LandmarkFilter, LatLon,
+    Ray2D, WorldPoint,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -138,7 +136,7 @@ fn load_landmarks(path: Option<&Path>) -> Result<Vec<Landmark>> {
     let rows: Vec<Gta6MapTuple> = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", resolved.display()))?;
     Ok(rows
-        .into_iter()
+        .iter()
         .map(|row| parse_gta6map_tuple(row, "gta6map.github.io"))
         .collect())
 }
@@ -148,7 +146,6 @@ fn iso8601_utc_now() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    // Civil date from Unix days (Howard Hinnant's algorithm)
     let days = (secs / 86_400) as i64;
     let rem = secs % 86_400;
     let hour = rem / 3600;
@@ -354,13 +351,22 @@ fn run_search(
         text: if query.trim().is_empty() {
             None
         } else {
-            Some(query)
+            Some(query.to_string())
         },
-        tags,
-        statuses: &statuses,
+        tags: if tags.is_empty() {
+            None
+        } else {
+            Some(tags.to_vec())
+        },
+        statuses: if statuses.is_empty() {
+            None
+        } else {
+            Some(statuses)
+        },
+        districts: None,
         positioned_only: positioned,
     };
-    let matches: Vec<&Landmark> = filter_landmarks(&landmarks, &filter)
+    let matches: Vec<Landmark> = filter_landmarks(&landmarks, &filter)
         .into_iter()
         .take(limit)
         .collect();
@@ -385,10 +391,15 @@ fn run_search(
 
 fn run_predict(lat: f64, lon: f64, k: usize, data: Option<&Path>, as_json: bool) -> Result<()> {
     let landmarks = load_landmarks(data)?;
-    let anchors: Vec<(LatLon, WorldPoint)> = landmarks
+    let anchors: Vec<Anchor> = landmarks
         .iter()
         .filter(|l| l.irl_status == IrlStatus::Confirmed)
-        .filter_map(|l| Some((l.irl?, l.ig?)))
+        .filter_map(|l| {
+            Some(Anchor {
+                irl: l.irl?,
+                ig: l.ig?,
+            })
+        })
         .collect();
 
     let model =
@@ -424,19 +435,16 @@ fn parse_ray(spec: &str) -> Result<Ray2D> {
         .trim()
         .parse()
         .with_context(|| format!("invalid bearing in ray '{spec}'"))?;
-    let weight: f64 = if parts.len() == 4 {
-        parts[3]
+    let origin = WorldPoint { x, y };
+    if parts.len() == 4 {
+        let weight: f64 = parts[3]
             .trim()
             .parse()
-            .with_context(|| format!("invalid weight in ray '{spec}'"))?
+            .with_context(|| format!("invalid weight in ray '{spec}'"))?;
+        Ok(Ray2D::weighted(origin, bearing, weight))
     } else {
-        1.0
-    };
-    Ok(Ray2D {
-        origin: WorldPoint { x, y },
-        bearing,
-        weight,
-    })
+        Ok(Ray2D::new(origin, bearing))
+    }
 }
 
 fn run_triangulate(ray_specs: &[String], as_json: bool) -> Result<()> {
@@ -556,7 +564,7 @@ mod tests {
         ]"#;
         let rows: Vec<Gta6MapTuple> = serde_json::from_str(sample).unwrap();
         let list: Vec<Landmark> = rows
-            .into_iter()
+            .iter()
             .map(|r| parse_gta6map_tuple(r, "gta6map.github.io"))
             .collect();
         let stats = landmark_stats(&list);
@@ -579,14 +587,13 @@ mod tests {
         )
         .unwrap();
         let list: Vec<Landmark> = rows
-            .into_iter()
+            .iter()
             .map(|r| parse_gta6map_tuple(r, "gta6map.github.io"))
             .collect();
         let gj = to_geojson(&list);
-        let features = gj["features"].as_array().unwrap();
-        assert_eq!(features.len(), 1);
-        assert_eq!(features[0]["id"], "b1");
-        assert_eq!(features[0]["properties"]["color"], "#aabbcc");
+        assert_eq!(gj.features.len(), 1);
+        assert_eq!(gj.features[0].id, "b1");
+        assert_eq!(gj.features[0].properties.color, "#aabbcc");
     }
 
     #[test]

@@ -1,13 +1,11 @@
-mod model;
-
-use model::{
+use leonida_core::{
     build_irl_to_ig_model, filter_landmarks, landmark_stats, nearest_landmarks,
     parse_gta6map_tuple, path_length as core_path_length, polygon_area as core_polygon_area,
     predict_ig as core_predict_ig, to_geojson, triangulate as core_triangulate, Anchor,
-    Gta6MapTuple, IrlStatus, Landmark, LandmarkFilter, LatLon, Ray2D, TileIndex, TileManifest,
-    WorldPoint,
+    Gta6MapTuple, IrlStatus, Landmark, LandmarkFilter, LatLon, Ray2D, TileCoord, TileManifest,
+    TileResolver as CoreTileResolver, TileSource, WorldPoint,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::Serializer;
 use wasm_bindgen::prelude::*;
 
@@ -18,6 +16,29 @@ fn to_js<T: Serialize + ?Sized>(val: &T) -> Result<JsValue, JsValue> {
 
 fn from_js<T: serde::de::DeserializeOwned>(val: JsValue) -> Result<T, JsValue> {
     serde_wasm_bindgen::from_value(val).map_err(|e| JsValue::from_str(&e.to_string()))
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JsLandmarkFilter {
+    text: Option<String>,
+    tags: Option<Vec<String>>,
+    statuses: Option<Vec<IrlStatus>>,
+    districts: Option<Vec<String>>,
+    #[serde(default)]
+    positioned_only: bool,
+}
+
+impl From<JsLandmarkFilter> for LandmarkFilter {
+    fn from(f: JsLandmarkFilter) -> Self {
+        Self {
+            text: f.text,
+            tags: f.tags,
+            statuses: f.statuses,
+            districts: f.districts,
+            positioned_only: f.positioned_only,
+        }
+    }
 }
 
 /// Handle to a loaded collection of Leonida landmarks.
@@ -39,7 +60,7 @@ impl Landmarks {
         let rows: Vec<Gta6MapTuple> =
             serde_json::from_str(raw_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
         let list = rows
-            .into_iter()
+            .iter()
             .map(|r| parse_gta6map_tuple(r, "gta6map.github.io"))
             .collect();
         Ok(Self { list })
@@ -70,7 +91,8 @@ impl Landmarks {
         let parsed: LandmarkFilter = if filter.is_null() || filter.is_undefined() {
             LandmarkFilter::default()
         } else {
-            from_js(filter)?
+            let js_filter: JsLandmarkFilter = from_js(filter)?;
+            js_filter.into()
         };
         let matches = filter_landmarks(&self.list, &parsed);
         to_js(&matches)
@@ -107,7 +129,7 @@ impl Landmarks {
                 })
             })
             .collect();
-        let Some(model) = build_irl_to_ig_model(&anchors) else {
+        let Ok(model) = build_irl_to_ig_model(&anchors) else {
             return Ok(JsValue::NULL);
         };
         match core_predict_ig(&model, LatLon { lat, lon }, k.unwrap_or(10)) {
@@ -132,7 +154,7 @@ pub fn predict_ig(
     k: Option<usize>,
 ) -> Result<JsValue, JsValue> {
     let parsed: Vec<Anchor> = from_js(anchors)?;
-    let Some(model) = build_irl_to_ig_model(&parsed) else {
+    let Ok(model) = build_irl_to_ig_model(&parsed) else {
         return Ok(JsValue::NULL);
     };
     match core_predict_ig(&model, LatLon { lat, lon }, k.unwrap_or(10)) {
@@ -168,7 +190,7 @@ pub fn polygon_area(points: JsValue) -> Result<f64, JsValue> {
 /// Resolves the tileset directory holding a tile, preferring the composite overlay over the base set.
 #[wasm_bindgen]
 pub struct TileResolver {
-    index: TileIndex,
+    inner: CoreTileResolver,
 }
 
 #[wasm_bindgen]
@@ -177,16 +199,30 @@ impl TileResolver {
     pub fn new(manifest: JsValue) -> Result<TileResolver, JsValue> {
         let parsed: TileManifest = from_js(manifest)?;
         Ok(Self {
-            index: TileIndex::from_manifest(parsed),
+            inner: CoreTileResolver::new(&parsed),
         })
     }
 
     pub fn has(&self, set: &str, z: u32, x: u32, y: u32) -> bool {
-        self.index.has(set, z, x, y)
+        let Ok(z) = u8::try_from(z) else {
+            return false;
+        };
+        self.inner.has(
+            set,
+            TileCoord {
+                z,
+                x: x as i32,
+                y: y as i32,
+            },
+        )
     }
 
     pub fn tilesets(&self) -> Vec<String> {
-        self.index.tilesets()
+        self.inner
+            .tilesets()
+            .into_iter()
+            .map(str::to_string)
+            .collect()
     }
 
     pub fn resolve(
@@ -197,13 +233,27 @@ impl TileResolver {
         x: u32,
         y: u32,
     ) -> Option<String> {
-        self.index.resolve(base, composite.as_deref(), z, x, y)
+        let z = u8::try_from(z).ok()?;
+        let src = TileSource {
+            base: base.to_string(),
+            composite,
+        };
+        self.inner
+            .resolve(
+                &src,
+                TileCoord {
+                    z,
+                    x: x as i32,
+                    y: y as i32,
+                },
+            )
+            .map(str::to_string)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::model::*;
+    use super::*;
 
     #[test]
     fn path_and_area_match_ts() {
@@ -213,8 +263,8 @@ mod tests {
             WorldPoint { x: 10.0, y: 5.0 },
             WorldPoint { x: 0.0, y: 5.0 },
         ];
-        assert!((path_length(&pts) - 25.0).abs() < 1e-9);
-        assert!((polygon_area(&pts) - 50.0).abs() < 1e-9);
+        assert!((core_path_length(&pts) - 25.0).abs() < 1e-9);
+        assert!((core_polygon_area(&pts) - 50.0).abs() < 1e-9);
     }
 
     #[test]
@@ -232,15 +282,19 @@ mod tests {
                 .into_iter()
                 .collect(),
         );
-        let idx = TileIndex::from_manifest(manifest);
+        let resolver = CoreTileResolver::new(&manifest);
+        let src = TileSource {
+            base: "base".to_string(),
+            composite: Some("comp".to_string()),
+        };
         assert_eq!(
-            idx.resolve("base", Some("comp"), 0, 1, 0).as_deref(),
+            resolver.resolve(&src, TileCoord { z: 0, x: 1, y: 0 }),
             Some("comp")
         );
         assert_eq!(
-            idx.resolve("base", Some("comp"), 0, 0, 0).as_deref(),
+            resolver.resolve(&src, TileCoord { z: 0, x: 0, y: 0 }),
             Some("base")
         );
-        assert_eq!(idx.resolve("base", Some("comp"), 0, 2, 0), None);
+        assert_eq!(resolver.resolve(&src, TileCoord { z: 0, x: 2, y: 0 }), None);
     }
 }
