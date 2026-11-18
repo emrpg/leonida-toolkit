@@ -1,11 +1,6 @@
-import initWasm, {
-  Landmarks as WasmLandmarks,
-  TileResolver as WasmTileResolver,
-  path_length as wasmPathLength,
-  polygon_area as wasmPolygonArea,
-  triangulate as wasmTriangulate,
-} from './wasm/leonida_wasm';
+import initWasm, * as wasmModule from './wasm/leonida_wasm';
 import type {
+  ChallengeScoreResult,
   Gta6MapTuple,
   GtamaplibVcFile,
   Landmark,
@@ -22,6 +17,14 @@ import type {
   TriangulationResult,
   WorldPoint,
 } from './types';
+
+const {
+  Landmarks: WasmLandmarks,
+  TileResolver: WasmTileResolver,
+  path_length: wasmPathLength,
+  polygon_area: wasmPolygonArea,
+  triangulate: wasmTriangulate,
+} = wasmModule;
 
 export interface WasmLandmarksHandle {
   all(): Landmark[];
@@ -47,9 +50,15 @@ export interface LeonidaWasmEngine {
   triangulate(rays: readonly Ray2D[]): TriangulationResult | null;
   pathLength(points: readonly WorldPoint[]): number;
   polygonArea(points: readonly WorldPoint[]): number;
+  scoreScreenshotChallenge(
+    targetX: number,
+    targetY: number,
+    guessX: number,
+    guessY: number,
+  ): ChallengeScoreResult;
 }
 
-function wrapLandmarksHandle(inner: WasmLandmarks): WasmLandmarksHandle {
+function wrapLandmarksHandle(inner: InstanceType<typeof WasmLandmarks>): WasmLandmarksHandle {
   return {
     all: () => inner.all() as Landmark[],
     filter: (f) => inner.filter(f) as Landmark[],
@@ -86,31 +95,54 @@ function parseGtamaplibVc(file: GtamaplibVcFile, source = 'gtamaplib-vc'): Landm
     }));
 }
 
+type ScoreFn = (tx: number, ty: number, gx: number, gy: number) => ChallengeScoreResult;
+
+function fallbackScoreChallenge(
+  targetX: number,
+  targetY: number,
+  guessX: number,
+  guessY: number,
+): ChallengeScoreResult {
+  const distance_m = Math.hypot(guessX - targetX, guessY - targetY);
+  const score = Math.round(5000 * Math.exp(-distance_m / 1200));
+  const grade =
+    score >= 4500 ? 'S' : score >= 3500 ? 'A' : score >= 2200 ? 'B' : score >= 1000 ? 'C' : 'D';
+  return { distance_m, score, grade };
+}
+
 let initPromise: Promise<LeonidaWasmEngine> | null = null;
 
 export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
   if (!initPromise) {
-    initPromise = initWasm().then(() => ({
-      createLandmarksFromTuples: (rows) =>
-        wrapLandmarksHandle(WasmLandmarks.load(JSON.stringify(rows))),
-      createLandmarksFromNormalized: (landmarks) =>
-        wrapLandmarksHandle(WasmLandmarks.load_normalised(JSON.stringify(landmarks))),
-      createTileResolver: (manifest) => {
-        const inner = new WasmTileResolver(manifest);
-        return {
-          tilesets: () => inner.tilesets(),
-          resolve: (src, t) => {
-            if (t.z < 0 || t.x < 0 || t.y < 0) return null;
-            return inner.resolve(src.base, src.composite ?? null, t.z, t.x, t.y) ?? null;
-          },
-          free: () => inner.free(),
-        };
-      },
-      parseGtamaplibVc,
-      triangulate: (rays) => (wasmTriangulate(rays) as TriangulationResult | null) ?? null,
-      pathLength: (points) => wasmPathLength(points),
-      polygonArea: (points) => wasmPolygonArea(points),
-    }));
+    initPromise = initWasm().then(() => {
+      const maybeWasmScore = (wasmModule as unknown as { score_screenshot_challenge?: ScoreFn })
+        .score_screenshot_challenge;
+      return {
+        createLandmarksFromTuples: (rows) =>
+          wrapLandmarksHandle(WasmLandmarks.load(JSON.stringify(rows))),
+        createLandmarksFromNormalized: (landmarks) =>
+          wrapLandmarksHandle(WasmLandmarks.load_normalised(JSON.stringify(landmarks))),
+        createTileResolver: (manifest) => {
+          const inner = new WasmTileResolver(manifest);
+          return {
+            tilesets: () => inner.tilesets(),
+            resolve: (src, t) => {
+              if (t.z < 0 || t.x < 0 || t.y < 0) return null;
+              return inner.resolve(src.base, src.composite ?? null, t.z, t.x, t.y) ?? null;
+            },
+            free: () => inner.free(),
+          };
+        },
+        parseGtamaplibVc,
+        triangulate: (rays) => (wasmTriangulate(rays) as TriangulationResult | null) ?? null,
+        pathLength: (points) => wasmPathLength(points),
+        polygonArea: (points) => wasmPolygonArea(points),
+        scoreScreenshotChallenge: (tx, ty, gx, gy) =>
+          typeof maybeWasmScore === 'function'
+            ? maybeWasmScore(tx, ty, gx, gy)
+            : fallbackScoreChallenge(tx, ty, gx, gy),
+      };
+    });
   }
   return initPromise;
 }

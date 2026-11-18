@@ -3,78 +3,230 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Leonida 互动地图 · GTA VI 社区工具</title>
+    <title>State of Leonida · Map Studio</title>
   </head>
-  <body>
-    <div id="app">
-      <aside id="sidebar">
-        <header>
-          <h1>Leonida 互动地图</h1>
-          <p class="sub">GTA VI 社区地标 · 摄影测量工具</p>
-        </header>
-        <nav id="tabs">
-          <button data-tab="landmarks" class="active">地标</button>
-          <button data-tab="tools">工具</button>
-          <button data-tab="mine">我的标记</button>
-          <button data-tab="about">关于</button>
+  <body class="bg-effects">
+    <div id="studio">
+      <!-- Top Studio Navbar -->
+      <header id="topbar">
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <div>
+            <div class="brand-title">State of Leonida</div>
+            <div class="brand-sub" data-i18n="brandSub">State of Leonida · 互动测绘与情报平台</div>
+          </div>
+        </div>
+
+        <div id="countdown-pill" class="pill">
+          <span class="pill-label" data-i18n="countdownLabel">GTA VI 倒计时</span>
+          <span id="countdown-val" class="mono">--d --:--:--</span>
+        </div>
+
+        <nav id="studio-nav">
+          <button data-module="map" class="active" data-i18n="navMap">互动地图</button>
+          <button data-module="challenge" data-i18n="navChallenge">猜图挑战</button>
+          <button data-module="media" data-i18n="navMedia">媒体库</button>
+          <button data-module="news" data-i18n="navNews">新闻与日志</button>
+          <button data-module="community" data-i18n="navCommunity">排行榜与通知</button>
         </nav>
 
-        <section id="tab-landmarks" class="tab active">
-          <input id="search" type="search" placeholder="搜索 ID / 游戏地址 / 现实地址 / 标签…" />
-          <div id="status-filters" class="chips"></div>
-          <div id="tag-filters" class="chips"></div>
-          <div id="result-count" class="muted"></div>
-          <ul id="landmark-list"></ul>
+        <div class="top-actions">
+          <button id="lang-toggle" class="ghost">EN</button>
+          <button id="btn-settings" class="ghost" data-i18n="settingsBtn">设置</button>
+        </div>
+      </header>
+
+      <!-- Workspace -->
+      <div id="studio-body">
+        <!-- Map & Challenge shared workspace -->
+        <div id="map-workspace" class="module-view active">
+          <aside id="sidebar">
+            <nav id="tabs">
+              <button data-tab="landmarks" class="active" data-i18n="tabLandmarks">地标</button>
+              <button data-tab="layers" data-i18n="tabLayers">图层</button>
+              <button data-tab="tools" data-i18n="tabTools">测绘</button>
+              <button data-tab="mine" data-i18n="tabMine">标记</button>
+              <button data-tab="about" data-i18n="tabAbout">关于</button>
+            </nav>
+
+            <section id="tab-landmarks" class="tab active">
+              <input id="search" type="search" placeholder="搜索 ID / 游戏地址 / 现实地址 / 标签…" />
+              <div id="status-filters" class="chips"></div>
+              <div id="tag-filters" class="chips"></div>
+              <div id="result-count" class="muted"></div>
+              <ul id="landmark-list"></ul>
+            </section>
+
+            <section id="tab-layers" class="tab">
+              <h3 data-i18n="datasetsTitle">多数据集图层开关</h3>
+              <div id="dataset-toggles" class="dataset-list"></div>
+            </section>
+
+            <section id="tab-tools" class="tab">
+              <h3 data-i18n="measureTitle">测距 / 面积</h3>
+              <div class="row">
+                <button id="tool-measure" data-i18n="startMeasure">开始测距</button>
+                <button id="tool-area" data-i18n="startArea">开始测面积</button>
+                <button id="tool-clear-measure" data-i18n="clear">清除</button>
+              </div>
+              <div id="measure-out" class="out"></div>
+
+              <h3 data-i18n="rayTitle">方位线三角定位</h3>
+              <p class="muted" data-i18n="rayHint">每条射线：先点击观察点，再点击视线方向上的任一点。≥2 条射线后自动求最小二乘交点。</p>
+              <div class="row">
+                <button id="tool-ray" data-i18n="addRay">添加射线</button>
+                <button id="tool-clear-rays" data-i18n="clearRays">清除射线</button>
+              </div>
+              <div id="ray-out" class="out"></div>
+
+              <h3 data-i18n="irlTitle">现实坐标 → 游戏坐标预测</h3>
+              <p class="muted" data-i18n="irlHint">基于已确认地标的局部加权仿射拟合（迈阿密等真实位置 → Leonida）。</p>
+              <div class="row">
+                <input id="irl-input" placeholder="纬度, 经度  例: 25.7907, -80.1300" />
+                <button id="irl-predict" data-i18n="predict">预测</button>
+              </div>
+              <div id="irl-out" class="out"></div>
+
+              <h3 data-i18n="exportTitle">导出</h3>
+              <div class="row">
+                <button id="export-geojson" data-i18n="exportGeoJson">导出当前筛选 GeoJSON</button>
+              </div>
+            </section>
+
+            <section id="tab-mine" class="tab">
+              <p class="muted" data-i18n="mineHint">在地图上 <b>右键</b>（移动端长按）添加个人标记，优先同步服务端并支持离线缓存。</p>
+              <div class="row">
+                <button id="mine-export" data-i18n="exportJson">导出 JSON</button>
+                <label class="btn"><span data-i18n="importJson">导入 JSON</span><input id="mine-import" type="file" accept="application/json" hidden /></label>
+                <button id="mine-clear" data-i18n="clearAll">全部清除</button>
+              </div>
+              <ul id="mine-list"></ul>
+            </section>
+
+            <section id="tab-about" class="tab">
+              <div id="about"></div>
+            </section>
+          </aside>
+
+          <!-- Screenshot Challenge Side Panel (shown when module === 'challenge') -->
+          <aside id="challenge-panel" class="hidden">
+            <div class="panel-head">
+              <h2 data-i18n="challengeTitle">Screenshot Challenge · 猜图定位挑战</h2>
+              <p class="muted" data-i18n="challengeHint">观察左侧线索与场景，在右侧地图点击你认为的位置，系统将调用 WASM 计算距离误差与得分！</p>
+            </div>
+            <div id="challenge-scene" class="scene-card"></div>
+            <div class="row">
+              <input id="challenge-player" placeholder="玩家昵称（默认 Anonymous）" />
+            </div>
+            <div class="row">
+              <button id="challenge-next" class="primary" data-i18n="challengeStart">随机下一题</button>
+              <button id="challenge-submit" disabled data-i18n="challengeSubmit">提交成绩到排行榜</button>
+            </div>
+            <div id="challenge-result" class="out"></div>
+            <h3 data-i18n="leaderboardTitle">猜图挑战排行榜</h3>
+            <ol id="challenge-lb-mini" class="lb-mini"></ol>
+          </aside>
+
+          <main id="map"></main>
+          <div id="coords" class="muted"></div>
+        </div>
+
+        <!-- Media Library View -->
+        <section id="view-media" class="module-view page-view">
+          <div class="page-inner">
+            <div class="page-head">
+              <h2 data-i18n="mediaTitle">Trailers & Leaks 媒体库</h2>
+              <div id="media-tabs" class="chips"></div>
+            </div>
+            <div id="media-grid" class="card-grid"></div>
+          </div>
         </section>
 
-        <section id="tab-tools" class="tab">
-          <h3>测距 / 面积</h3>
-          <div class="row">
-            <button id="tool-measure">开始测距</button>
-            <button id="tool-area">开始测面积</button>
-            <button id="tool-clear-measure">清除</button>
-          </div>
-          <div id="measure-out" class="out"></div>
-
-          <h3>方位线三角定位</h3>
-          <p class="muted">每条射线：先点击观察点，再点击视线方向上的任一点。≥2 条射线后自动求最小二乘交点。</p>
-          <div class="row">
-            <button id="tool-ray">添加射线</button>
-            <button id="tool-clear-rays">清除射线</button>
-          </div>
-          <div id="ray-out" class="out"></div>
-
-          <h3>现实坐标 → 游戏坐标预测</h3>
-          <p class="muted">基于已确认地标的局部加权仿射拟合（迈阿密等真实位置 → Leonida）。</p>
-          <div class="row">
-            <input id="irl-input" placeholder="纬度, 经度  例: 25.7907, -80.1300" />
-            <button id="irl-predict">预测</button>
-          </div>
-          <div id="irl-out" class="out"></div>
-
-          <h3>导出</h3>
-          <div class="row">
-            <button id="export-geojson">导出当前筛选 GeoJSON</button>
+        <!-- News & Changelog View -->
+        <section id="view-news" class="module-view page-view">
+          <div class="page-inner two-col">
+            <div>
+              <h2 data-i18n="newsTitle">新闻与数据库更新日志</h2>
+              <div id="news-list" class="stack"></div>
+            </div>
+            <div>
+              <h2 data-i18n="changelogTitle">数据库更新日志</h2>
+              <div id="changelog-list" class="stack"></div>
+              <h2 style="margin-top:24px" data-i18n="creditsTitle">致谢与支持者</h2>
+              <div id="credits-box" class="glass-card"></div>
+            </div>
           </div>
         </section>
 
-        <section id="tab-mine" class="tab">
-          <p class="muted">在地图上 <b>右键</b>（移动端长按）添加个人标记，数据保存在本机浏览器。</p>
-          <div class="row">
-            <button id="mine-export">导出 JSON</button>
-            <label class="btn">导入 JSON<input id="mine-import" type="file" accept="application/json" hidden /></label>
-            <button id="mine-clear">全部清除</button>
+        <!-- Leaderboard & Notifications View -->
+        <section id="view-community" class="module-view page-view">
+          <div class="page-inner two-col">
+            <div>
+              <h2 data-i18n="leaderboardTitle">猜图挑战排行榜</h2>
+              <div id="game-stats-bar" class="stats-bar"></div>
+              <div id="leaderboard-table" class="glass-card"></div>
+              <h3 data-i18n="ranksTitle">段位体系</h3>
+              <div id="ranks-list" class="chips"></div>
+            </div>
+            <div>
+              <div class="row" style="justify-content:space-between">
+                <h2 data-i18n="notificationsTitle">系统通知与更新广播</h2>
+                <button id="notif-read-btn" data-i18n="markAllRead">全部标为已读</button>
+              </div>
+              <div id="notifications-list" class="stack"></div>
+            </div>
           </div>
-          <ul id="mine-list"></ul>
         </section>
-
-        <section id="tab-about" class="tab">
-          <div id="about"></div>
-        </section>
-      </aside>
-      <main id="map"></main>
-      <div id="coords" class="muted"></div>
+      </div>
     </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-card glass-card">
+        <div class="modal-head">
+          <h2 data-i18n="settingsTitle">Map Studio 设置</h2>
+          <button id="settings-close" class="ghost">✕</button>
+        </div>
+        <div class="modal-body">
+          <label class="toggle-row">
+            <input type="checkbox" id="set-bg-effects" />
+            <span data-i18n="bgEffectsLabel">开启霓虹玻璃背景光效 (bgEffects)</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-show-labels" />
+            <span data-i18n="showLabelsLabel">显示地标悬停提示 (showLabels)</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-show-3d" />
+            <span data-i18n="show3dLabel">默认开启 3D 地标图层</span>
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" id="set-auto-fly" />
+            <span data-i18n="autoFlyLabel">点击结果自动飞往坐标 (autoFly)</span>
+          </label>
+
+          <div class="color-row">
+            <span data-i18n="markerColorLabel">个人标记自定义颜色 (markerCustomColor)</span>
+            <input type="color" id="set-marker-color" />
+          </div>
+
+          <h3 data-i18n="clusterColorsTitle">数据集聚类颜色 (clusterCustomColors)</h3>
+          <div class="color-grid">
+            <label>Landmarks <input type="color" id="col-landmarks" /></label>
+            <label>Trailer 1 <input type="color" id="col-trailer1" /></label>
+            <label>Trailer 2 <input type="color" id="col-trailer2" /></label>
+            <label>Trailer 3 <input type="color" id="col-trailer3" /></label>
+            <label>Leaks <input type="color" id="col-leaks" /></label>
+            <label>Screenshots <input type="color" id="col-screenshots" /></label>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="settings-reset" data-i18n="resetSettings">恢复默认</button>
+          <button id="settings-save" class="primary" data-i18n="saveSettings">保存并应用</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

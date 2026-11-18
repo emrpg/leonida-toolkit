@@ -136,12 +136,124 @@ export interface UserMarker {
   x: number;
   y: number;
   note?: string;
+  color?: string;
   createdAt: number;
 }
 
 export interface UserMarkersExport {
   schema: 'leonida-user-markers-v1';
   markers: UserMarker[];
+}
+
+// ---------- State of Leonida v0.3 Types ----------
+export type SolDatasetKey =
+  | 'markers'
+  | 'trailer1'
+  | 'trailer2'
+  | 'trailer3'
+  | 'leaks'
+  | 'screenshots'
+  | 'el_screenshots';
+
+export interface SolEntry {
+  readonly id: string;
+  readonly title: string;
+  readonly category?: string;
+  readonly dataset: string;
+  readonly x: number;
+  readonly y: number;
+  readonly z?: number;
+  readonly district?: string;
+  readonly status?: string;
+  readonly description?: string;
+  readonly timestampSec?: number;
+  readonly mediaUrl?: string;
+  readonly realWorld?: string;
+}
+
+export interface ChallengeScoreResult {
+  readonly distance_m: number;
+  readonly score: number;
+  readonly grade: 'S' | 'A' | 'B' | 'C' | 'D';
+}
+
+export interface LeaderboardEntry {
+  readonly rank?: number;
+  readonly player: string;
+  readonly score: number;
+  readonly distance_m?: number;
+  readonly grade?: string;
+  readonly rounds?: number;
+  readonly created_at?: string | number;
+}
+
+export interface GameStats {
+  readonly total_plays?: number;
+  readonly best_score?: number;
+  readonly avg_score?: number;
+}
+
+export interface RankInfo {
+  readonly name: string;
+  readonly min_score?: number;
+  readonly badge?: string;
+  readonly color?: string;
+}
+
+export interface NotificationItem {
+  readonly id: string;
+  readonly title: string;
+  readonly message: string;
+  readonly read?: boolean;
+  readonly created_at?: string;
+}
+
+export interface NewsItem {
+  readonly id?: string;
+  readonly title: string;
+  readonly date?: string;
+  readonly summary?: string;
+  readonly url?: string;
+  readonly tag?: string;
+  readonly x?: number;
+  readonly y?: number;
+}
+
+export interface ChangelogItem {
+  readonly version?: string;
+  readonly date?: string;
+  readonly title?: string;
+  readonly changes?: readonly string[];
+  readonly description?: string;
+}
+
+export interface MediaTabInfo {
+  readonly key: string;
+  readonly label: string;
+  readonly count?: number;
+}
+
+export interface MapSettings {
+  showGrid: boolean;
+  showLabels: boolean;
+  show3dByDefault: boolean;
+  autoFly: boolean;
+}
+
+export interface ClusterCustomColors {
+  landmarks: string;
+  trailer1: string;
+  trailer2: string;
+  trailer3: string;
+  leaks: string;
+  screenshots: string;
+}
+
+export interface StudioSettings {
+  mapSettings: MapSettings;
+  clusterCustomColors: ClusterCustomColors;
+  markerCustomColor: string;
+  bgEffects: boolean;
 }
 
 export function formatDistance(m: number): string {
