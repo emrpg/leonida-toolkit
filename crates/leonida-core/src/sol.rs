@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::coords::{bearing, WorldPoint};
 use crate::error::CoreError;
 
 /// Unified entry across State of Leonida datasets (`markers`, `trailer1..3`, `leaks`, `screenshots`, `el_screenshots`).
@@ -260,4 +261,160 @@ pub fn filter_sol_entries(entries: &[SolEntry], filter: &SolEntryFilter) -> Vec<
         })
         .cloned()
         .collect()
+}
+
+/// Normalized heatmap grid cell in Leonida world coordinates (v0.8).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapCell {
+    pub x: f64,
+    pub y: f64,
+    pub count: usize,
+    pub weight: f64,
+}
+
+/// Aggregate 2D world points into grid cells of `cell_size_m` metres with normalized weight `0.0..=1.0`.
+pub fn compute_heatmap_cells(points: &[[f64; 2]], cell_size_m: f64) -> Vec<HeatmapCell> {
+    if points.is_empty() || !cell_size_m.is_finite() || cell_size_m <= 0.0 {
+        return Vec::new();
+    }
+
+    let mut grid: BTreeMap<(i64, i64), usize> = BTreeMap::new();
+    for &[px, py] in points {
+        if !px.is_finite() || !py.is_finite() {
+            continue;
+        }
+        let gx = (px / cell_size_m).floor() as i64;
+        let gy = (py / cell_size_m).floor() as i64;
+        *grid.entry((gx, gy)).or_insert(0) += 1;
+    }
+
+    let max_count = grid.values().copied().max().unwrap_or(0);
+    if max_count == 0 {
+        return Vec::new();
+    }
+
+    let mut cells: Vec<HeatmapCell> = grid
+        .into_iter()
+        .map(|((gx, gy), count)| HeatmapCell {
+            x: (gx as f64 + 0.5) * cell_size_m,
+            y: (gy as f64 + 0.5) * cell_size_m,
+            count,
+            weight: count as f64 / max_count as f64,
+        })
+        .collect();
+    cells.sort_by_key(|a| std::cmp::Reverse(a.count));
+    cells
+}
+
+/// Interpolated position and compass bearing along a Marker Motion path (v0.8).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MotionSample {
+    pub x: f64,
+    pub y: f64,
+    pub bearing_deg: f64,
+    pub progress: f64,
+}
+
+/// Smoothly interpolate along `path` at normalized progress `t` in `[0.0, 1.0]`.
+pub fn interpolate_motion_path(path: &[[f64; 2]], t: f64) -> Option<MotionSample> {
+    if path.is_empty()
+        || !t.is_finite()
+        || path.iter().any(|p| !p[0].is_finite() || !p[1].is_finite())
+    {
+        return None;
+    }
+
+    let progress = t.clamp(0.0, 1.0);
+    if path.len() == 1 {
+        return Some(MotionSample {
+            x: path[0][0],
+            y: path[0][1],
+            bearing_deg: 0.0,
+            progress,
+        });
+    }
+
+    let seg_lens: Vec<f64> = path
+        .windows(2)
+        .map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1]))
+        .collect();
+    let total_len: f64 = seg_lens.iter().sum();
+
+    if total_len <= 0.0 {
+        return Some(MotionSample {
+            x: path[0][0],
+            y: path[0][1],
+            bearing_deg: 0.0,
+            progress,
+        });
+    }
+
+    let target = progress * total_len;
+    let mut acc = 0.0;
+    for (idx, &seg_len) in seg_lens.iter().enumerate() {
+        let a = path[idx];
+        let b = path[idx + 1];
+        if seg_len <= 0.0 {
+            continue;
+        }
+        if acc + seg_len >= target || idx + 1 == seg_lens.len() {
+            let local_t = ((target - acc) / seg_len).clamp(0.0, 1.0);
+            return Some(MotionSample {
+                x: a[0] + (b[0] - a[0]) * local_t,
+                y: a[1] + (b[1] - a[1]) * local_t,
+                bearing_deg: bearing(WorldPoint::new(a[0], a[1]), WorldPoint::new(b[0], b[1])),
+                progress,
+            });
+        }
+        acc += seg_len;
+    }
+
+    let last = path[path.len() - 1];
+    Some(MotionSample {
+        x: last[0],
+        y: last[1],
+        bearing_deg: 0.0,
+        progress,
+    })
+}
+
+/// Community discussion comment attached to a landmark or marker (v0.8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkerComment {
+    pub id: String,
+    pub marker_id: String,
+    pub author: String,
+    pub body: String,
+    pub created_at: i64,
+}
+
+/// Admin Studio database overview counts (v0.8).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AdminDbOverview {
+    pub landmarks: usize,
+    pub user_markers: usize,
+    pub comments: usize,
+    pub challenge_scores: usize,
+    pub news_items: usize,
+    pub notifications: usize,
+    pub schema_version: String,
+}
+
+/// Cached Wiki summary card entry from `wiki-cache.json` (v0.8).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiCacheEntry {
+    pub id: String,
+    pub title: String,
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
 }

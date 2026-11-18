@@ -58,10 +58,11 @@ pub use search::{
     LandmarkFilter, NearestLandmark,
 };
 pub use sol::{
-    filter_sol_entries, group_sol_entries_by_dataset, parse_sol_entries,
-    score_screenshot_challenge, sol_dataset_stats, ChallengeGrade, ChallengeScoreResult,
-    ChangelogEntry, NewsItem, NotificationItem, RankInfo, SiteSettings, SolDatasetStats, SolEntry,
-    SolEntryFilter,
+    compute_heatmap_cells, filter_sol_entries, group_sol_entries_by_dataset,
+    interpolate_motion_path, parse_sol_entries, score_screenshot_challenge, sol_dataset_stats,
+    AdminDbOverview, ChallengeGrade, ChallengeScoreResult, ChangelogEntry, HeatmapCell,
+    MarkerComment, MotionSample, NewsItem, NotificationItem, RankInfo, SiteSettings,
+    SolDatasetStats, SolEntry, SolEntryFilter, WikiCacheEntry,
 };
 pub use tiles::{
     metres_per_pixel, pixel_to_world, tile_bounds, tile_file_name, tile_for_world, tiles_per_side,
