@@ -1,3 +1,4 @@
+mod natives;
 mod phone;
 mod rage;
 mod sol;
@@ -158,6 +159,8 @@ enum Commands {
     Rage(rage::RageArgs),
     /// LeonidaOS companion phone app diagnostics & stats
     Phone(phone::PhoneArgs),
+    /// RAGE NativeDB index builder, search, and stats (citizenfx-natives)
+    Natives(natives::NativesArgs),
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -593,6 +596,7 @@ fn main() -> Result<()> {
         } => run_solve_camera(width, height, fov, &obs, json),
         Commands::Rage(args) => rage::run_rage(args),
         Commands::Phone(args) => phone::run_phone(args),
+        Commands::Natives(args) => natives::run_natives(args),
     }
 }
 
@@ -924,5 +928,35 @@ mod tests {
         assert_eq!(report.positioned_landmarks, 1);
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn parse_citizenfx_native_md_and_build() {
+        let md = r#"---
+ns: PLAYER
+---
+## CAN_PED_HEAR_PLAYER
+
+```c
+// 0xF297383AA91DCA29 0x1C70B2EB
+BOOL CAN_PED_HEAR_PLAYER(Player player, Ped ped);
+```
+
+Checks if a ped can hear the player.
+
+## Parameters
+* **player**:
+* **ped**:
+"#;
+        let entry = natives::parse_native_md(md, "FALLBACK").unwrap();
+        assert_eq!(entry.namespace, "PLAYER");
+        assert_eq!(entry.name, "CAN_PED_HEAR_PLAYER");
+        assert_eq!(entry.hash, "0xF297383AA91DCA29");
+        assert_eq!(entry.jhash.as_deref(), Some("0x1C70B2EB"));
+        assert_eq!(entry.return_type, "BOOL");
+        assert_eq!(entry.params.len(), 2);
+        assert_eq!(entry.params[0].param_type, "Player");
+        assert_eq!(entry.params[0].name, "player");
+        assert_eq!(entry.description, "Checks if a ped can hear the player.");
     }
 }

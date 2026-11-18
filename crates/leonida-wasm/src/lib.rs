@@ -1,3 +1,4 @@
+mod natives;
 mod rage;
 mod sol;
 mod v04;
@@ -448,6 +449,39 @@ pub fn export_handling_meta(items: JsValue) -> Result<String, JsValue> {
     Ok(rage::export_handling_meta(&parsed))
 }
 
+/// Generate a ScriptHookV C++ / C# SHVDN / Rust FFI stub for a `NativeEntry`.
+#[wasm_bindgen]
+pub fn generate_shv_stub(entry: JsValue, lang: &str) -> Result<String, JsValue> {
+    let parsed: natives::NativeEntry = from_js(entry)?;
+    natives::generate_shv_stub(&parsed, lang).map_err(|e| JsValue::from_str(&e))
+}
+
+/// Filter `NativeEntry[]` by query string and/or namespace.
+#[wasm_bindgen]
+pub fn filter_natives(
+    entries: JsValue,
+    q: Option<String>,
+    namespace: Option<String>,
+    limit: Option<usize>,
+) -> Result<JsValue, JsValue> {
+    let parsed: Vec<natives::NativeEntry> = from_js(entries)?;
+    let matches = natives::filter_natives(
+        &parsed,
+        q.as_deref(),
+        namespace.as_deref(),
+        limit.unwrap_or(100),
+    );
+    to_js(&matches)
+}
+
+/// Compute per-namespace counts for `NativeEntry[]`.
+#[wasm_bindgen]
+pub fn native_stats(entries: JsValue) -> Result<JsValue, JsValue> {
+    let parsed: Vec<natives::NativeEntry> = from_js(entries)?;
+    let stats = natives::native_stats(&parsed);
+    to_js(&stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,5 +686,33 @@ mod tests {
         let exported = rage::export_handling_meta(&items);
         let roundtrip = rage::parse_handling_meta(&exported).unwrap();
         assert_eq!(roundtrip[0].handling_name, "ADDER");
+    }
+
+    #[test]
+    fn natives_stub_generation_and_filter() {
+        let entry = natives::NativeEntry {
+            namespace: "PLAYER".into(),
+            name: "CAN_PED_HEAR_PLAYER".into(),
+            hash: "0xF297383AA91DCA29".into(),
+            jhash: Some("0x1C70B2EB".into()),
+            params: vec![
+                natives::NativeParam {
+                    name: "player".into(),
+                    param_type: "Player".into(),
+                },
+                natives::NativeParam {
+                    name: "ped".into(),
+                    param_type: "Ped".into(),
+                },
+            ],
+            return_type: "BOOL".into(),
+            description: "Checks if a ped can hear the player.".into(),
+        };
+        let cpp = natives::generate_shv_stub(&entry, "cpp").unwrap();
+        assert!(cpp.contains("invoke<BOOL>(0xF297383AA91DCA29, player, ped)"));
+        let cs = natives::generate_shv_stub(&entry, "csharp").unwrap();
+        assert!(cs.contains("Function.Call<bool>((Hash)0xF297383AA91DCA29, player, ped)"));
+        let rs = natives::generate_shv_stub(&entry, "rust").unwrap();
+        assert!(rs.contains("shv_invoke::<bool>(0xF297383AA91DCA29"));
     }
 }
