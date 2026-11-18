@@ -9,6 +9,7 @@ use tower::ServiceExt;
 
 use leonida_server::core_adapter::CoreEngine;
 use leonida_server::db::{MarkerStore, MARKERS_SCHEMA};
+use leonida_server::natives::{NativeEntry, NativeParam};
 use leonida_server::{build_router, AppState};
 
 fn sample_landmarks_json() -> &'static str {
@@ -21,11 +22,62 @@ fn sample_landmarks_json() -> &'static str {
     ]"#
 }
 
+fn sample_natives() -> Vec<NativeEntry> {
+    vec![
+        NativeEntry {
+            namespace: "PLAYER".into(),
+            name: "GET_PLAYER_PED".into(),
+            hash: "0x43A66C31C68491C0".into(),
+            jhash: Some("0x6E31E993".into()),
+            params: vec![NativeParam {
+                name: "player".into(),
+                param_type: "Player".into(),
+            }],
+            return_type: "Ped".into(),
+            description: "Gets the ped for a specified player index.".into(),
+        },
+        NativeEntry {
+            namespace: "VEHICLE".into(),
+            name: "CREATE_VEHICLE".into(),
+            hash: "0xAF35D0D2583051B0".into(),
+            jhash: None,
+            params: vec![],
+            return_type: "Vehicle".into(),
+            description: "Creates a vehicle at the given coordinates.".into(),
+        },
+        NativeEntry {
+            namespace: "PLAYER".into(),
+            name: "SET_PLAYER_INVINCIBLE".into(),
+            hash: "0x239528EACDC3E7DE".into(),
+            jhash: None,
+            params: vec![],
+            return_type: "void".into(),
+            description: "Sets whether a player is invincible.".into(),
+        },
+    ]
+}
+
 fn test_app_with_dirs(
     dist_dir: PathBuf,
     tiles_dir: PathBuf,
     data_dir: PathBuf,
     phone_dist_dir: PathBuf,
+) -> axum::Router {
+    test_app_with_all_dirs(
+        dist_dir,
+        tiles_dir,
+        data_dir,
+        phone_dist_dir,
+        std::env::temp_dir(),
+    )
+}
+
+fn test_app_with_all_dirs(
+    dist_dir: PathBuf,
+    tiles_dir: PathBuf,
+    data_dir: PathBuf,
+    phone_dist_dir: PathBuf,
+    natives_dist_dir: PathBuf,
 ) -> axum::Router {
     let engine = Arc::new(
         CoreEngine::from_gta6map_json(sample_landmarks_json()).expect("parse sample json"),
@@ -39,10 +91,12 @@ fn test_app_with_dirs(
         engine,
         markers,
         tile_manifest,
+        natives: Arc::new(sample_natives()),
         dist_dir,
         tiles_dir,
         data_dir,
         phone_dist_dir,
+        natives_dist_dir,
     })
 }
 
@@ -1224,6 +1278,121 @@ async fn sol_media_files_and_static_data() {
     assert_eq!(res.status(), StatusCode::OK);
     let raw = body_json(res).await;
     assert_eq!(raw[0]["title"], "Vice Beach Shot");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn natives_search_stats_bookmarks_and_static_hosting() {
+    let base = std::env::temp_dir().join(format!("leonida-nat-test-{}", uuid::Uuid::new_v4()));
+    let natives_dist = base.join("natives_dist");
+    std::fs::create_dir_all(&natives_dist).unwrap();
+    std::fs::write(natives_dist.join("index.html"), "<html>NativeDB</html>").unwrap();
+
+    let app = test_app_with_all_dirs(
+        base.clone(),
+        base.clone(),
+        base.clone(),
+        base.clone(),
+        natives_dist,
+    );
+
+    // Search by query & namespace
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/natives?q=ped&ns=PLAYER&limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let list = body_json(res).await;
+    assert_eq!(list["total"], 1);
+    assert_eq!(list["items"][0]["name"], "GET_PLAYER_PED");
+
+    // Stats
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/natives/stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let stats = body_json(res).await;
+    assert_eq!(stats["total"], 3);
+    assert_eq!(stats["namespaces"][0]["namespace"], "PLAYER");
+    assert_eq!(stats["namespaces"][0]["count"], 2);
+
+    // Bookmarks CRUD
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/natives/bookmarks")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "hash": "0x43A66C31C68491C0",
+                        "namespace": "PLAYER",
+                        "name": "GET_PLAYER_PED",
+                        "note": "Primary player ped lookup"
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/natives/bookmarks")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bms = body_json(res).await;
+    assert_eq!(bms["bookmarks"].as_array().unwrap().len(), 1);
+    assert_eq!(bms["bookmarks"][0]["note"], "Primary player ped lookup");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::delete("/api/natives/bookmarks?hash=0x43A66C31C68491C0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::delete("/api/natives/bookmarks/0x43A66C31C68491C0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Static /natives/
+    let res = app
+        .oneshot(Request::get("/natives/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"<html>NativeDB</html>");
 
     let _ = std::fs::remove_dir_all(&base);
 }

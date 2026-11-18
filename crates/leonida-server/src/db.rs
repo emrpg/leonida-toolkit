@@ -166,6 +166,13 @@ impl MarkerStore {
                  caption TEXT NOT NULL,
                  image_data_url TEXT NOT NULL,
                  created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS native_bookmarks (
+                 hash TEXT PRIMARY KEY,
+                 namespace TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 note TEXT NOT NULL DEFAULT '',
+                 created_at INTEGER NOT NULL
              );",
         )
         .context("initialize sqlite schema")?;
@@ -907,6 +914,84 @@ impl MarkerStore {
         let affected = conn.execute("DELETE FROM phone_photos WHERE id = ?1", params![id])?;
         Ok(affected > 0)
     }
+
+    pub fn list_native_bookmarks(&self) -> Result<Vec<NativeBookmark>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT hash, namespace, name, note, created_at
+             FROM native_bookmarks ORDER BY created_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(NativeBookmark {
+                hash: row.get(0)?,
+                namespace: row.get(1)?,
+                name: row.get(2)?,
+                note: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_native_bookmark(&self, input: SaveNativeBookmarkInput) -> Result<NativeBookmark> {
+        let now = now_unix_millis();
+        let bookmark = NativeBookmark {
+            hash: input.hash,
+            namespace: input.namespace.unwrap_or_default(),
+            name: input.name.unwrap_or_default(),
+            note: input.note.unwrap_or_default(),
+            created_at: now,
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO native_bookmarks (hash, namespace, name, note, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(hash) DO UPDATE SET
+                 namespace = excluded.namespace,
+                 name = excluded.name,
+                 note = excluded.note",
+            params![
+                bookmark.hash,
+                bookmark.namespace,
+                bookmark.name,
+                bookmark.note,
+                bookmark.created_at
+            ],
+        )?;
+        Ok(bookmark)
+    }
+
+    pub fn delete_native_bookmark(&self, hash: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let affected = conn.execute(
+            "DELETE FROM native_bookmarks WHERE hash = ?1",
+            params![hash],
+        )?;
+        Ok(affected > 0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeBookmark {
+    pub hash: String,
+    pub namespace: String,
+    pub name: String,
+    pub note: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveNativeBookmarkInput {
+    pub hash: String,
+    pub namespace: Option<String>,
+    pub name: Option<String>,
+    pub note: Option<String>,
 }
 
 fn map_phone_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhoneMessage> {

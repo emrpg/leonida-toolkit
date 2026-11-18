@@ -10,6 +10,7 @@ use tracing_subscriber::EnvFilter;
 
 use leonida_server::core_adapter::CoreEngine;
 use leonida_server::db::MarkerStore;
+use leonida_server::natives::NativeEntry;
 use leonida_server::{build_router, AppState};
 
 #[tokio::main]
@@ -25,6 +26,11 @@ async fn main() -> Result<()> {
     let tiles_dir = env_path("GTA6MAP_TILES", "apps/map/public/tiles");
     let dist_dir = env_path("GTA6MAP_DIST", "apps/map/dist");
     let phone_dist_dir = env_path("LEONIDA_PHONE_DIST", "apps/phone/dist");
+    let natives_dist_dir = env_path("LEONIDA_NATIVES_DIST", "apps/natives/dist");
+    let natives_json_path = env_path(
+        "LEONIDA_NATIVES_JSON",
+        "apps/natives/public/data/natives.json",
+    );
     let db_path = env_path("LEONIDA_DB", "data/leonida-markers.db");
     let addr: SocketAddr = env::var("LEONIDA_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
@@ -45,16 +51,19 @@ async fn main() -> Result<()> {
     };
 
     let tile_manifest = load_tile_manifest(&data_dir.join("tile-manifest.json"));
+    let natives = load_natives(&natives_json_path);
     let markers = MarkerStore::open(&db_path)?;
 
     let state = AppState {
         engine,
         markers,
         tile_manifest: Arc::new(tile_manifest),
+        natives: Arc::new(natives),
         dist_dir: dist_dir.clone(),
         tiles_dir: tiles_dir.clone(),
         data_dir,
         phone_dist_dir,
+        natives_dist_dir,
     };
 
     let app = build_router(state);
@@ -83,5 +92,15 @@ fn load_tile_manifest(path: &Path) -> Value {
             json!({})
         }),
         Err(_) => json!({}),
+    }
+}
+
+fn load_natives(path: &Path) -> Vec<NativeEntry> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|err| {
+            tracing::warn!("invalid natives.json {}: {err}", path.display());
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
     }
 }

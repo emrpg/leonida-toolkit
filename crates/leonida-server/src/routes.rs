@@ -21,6 +21,10 @@ use crate::db::{
     UpdateMarkerInput, UserMarker, MARKERS_SCHEMA,
 };
 use crate::error::AppError;
+use crate::natives::{
+    delete_bookmark_path, delete_bookmark_query_or_body, list_bookmarks, list_natives,
+    natives_stats, save_bookmark,
+};
 use crate::phone::{
     create_message, delete_note_path, delete_note_query_or_body, delete_photo_path,
     delete_photo_query_or_body, list_contacts, list_messages, list_notes, list_photos, save_note,
@@ -39,6 +43,8 @@ pub fn build_router(state: AppState) -> Router {
     );
     let data_service = ServeDir::new(&state.data_dir);
     let phone_service = ServeDir::new(&state.phone_dist_dir).append_index_html_on_directories(true);
+    let natives_service =
+        ServeDir::new(&state.natives_dist_dir).append_index_html_on_directories(true);
 
     let dist_service = ServeDir::new(&state.dist_dir).append_index_html_on_directories(true);
 
@@ -100,12 +106,25 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(delete_photo_query_or_body),
         )
         .route("/api/phone/photos/{id}", delete(delete_photo_path))
+        .route("/api/natives", get(list_natives))
+        .route("/api/natives/stats", get(natives_stats))
+        .route(
+            "/api/natives/bookmarks",
+            get(list_bookmarks)
+                .post(save_bookmark)
+                .delete(delete_bookmark_query_or_body),
+        )
+        .route(
+            "/api/natives/bookmarks/{hash}",
+            delete(delete_bookmark_path),
+        )
         .route("/auth/api.php", get(auth_api).post(auth_api))
         .route("/api/sol/challenge/submit", post(submit_challenge))
         .route("/get-media-files.php", get(get_media_files))
         .nest_service("/tiles", tiles_service)
         .nest_service("/data", data_service)
         .nest_service("/phone", phone_service)
+        .nest_service("/natives", natives_service)
         .fallback_service(dist_service)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
