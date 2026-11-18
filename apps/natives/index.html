@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAGE NativeDB & ScriptHookV ABI 工作台</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <div class="brand">
+          <span class="dot"></span>
+          <div>
+            <div class="title">RAGE NativeDB & ScriptHookV Studio</div>
+            <div class="sub">CitizenFX Natives · C++ / C# / Rust ABI 代码生成</div>
+          </div>
+        </div>
+        <div class="search-wrap">
+          <input id="native-search" type="search" placeholder="毫秒检索: 函数名 / 0x64位哈希 / 描述…" />
+          <span id="search-meta" class="muted mono"></span>
+        </div>
+        <button id="btn-shv-abi" class="primary">ScriptHookV TLS / 纤程 ABI 速查</button>
+      </header>
+
+      <div id="workspace">
+        <aside id="ns-sidebar">
+          <button class="ns-item active" data-ns="ALL">
+            <span>全部命名空间</span><span id="ns-all-count" class="badge">0</span>
+          </button>
+          <button class="ns-item" data-ns="BOOKMARKS">
+            <span>★ 我的书签</span><span id="ns-bm-count" class="badge">0</span>
+          </button>
+          <div class="ns-divider">Namespaces</div>
+          <div id="ns-list"></div>
+        </aside>
+
+        <section id="list-pane">
+          <ul id="native-list"></ul>
+        </section>
+
+        <main id="detail-pane">
+          <div id="detail-empty" class="muted">请从左侧选择一个 Native 函数查看签名与生成代码。</div>
+          <div id="detail-body" class="hidden">
+            <div class="detail-head">
+              <div>
+                <div id="d-ns" class="mono accent"></div>
+                <h2 id="d-name"></h2>
+                <div id="d-hashes" class="muted mono"></div>
+              </div>
+              <div class="bm-box">
+                <input id="bookmark-note" placeholder="开发备注（可选）" />
+                <button id="toggle-bookmark">☆ 收藏</button>
+              </div>
+            </div>
+
+            <p id="d-desc" class="desc"></p>
+
+            <h3>参数签名</h3>
+            <table id="d-params" class="param-table"></table>
+
+            <div class="code-head">
+              <div class="lang-tabs">
+                <button class="chip on" data-lang="cpp">C++ (ScriptHookV)</button>
+                <button class="chip" data-lang="csharp">C# (SHVDN)</button>
+                <button class="chip" data-lang="rust">Rust (FFI)</button>
+              </div>
+              <button id="copy-stub">一键复制</button>
+            </div>
+            <pre id="stub-code" class="code-box"></pre>
+          </div>
+        </main>
+      </div>
+    </div>
+
+    <!-- ScriptHookV ABI Quick-Reference Modal -->
+    <div id="shv-modal" class="modal hidden">
+      <div class="modal-card">
+        <div class="modal-head">
+          <h2>ScriptHookV `scrThread` TLS 与纤程调度 ABI 速查</h2>
+          <button id="shv-close">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="abi-block">
+            <h3>1. `rage::scrThread` TLS 槽位</h3>
+            <p class="muted">RAGE 主线程在 TLS（Thread Local Storage）中保存当前活跃脚本线程指针（<code>scrThread::GetActiveThread()</code>，常见偏移 <code>tls + 0x828</code>）。ScriptHookV 在每帧 <code>scrThread::Tick</code> Hook 内切换 TLS 上下文以合法调用 Native。</p>
+          </div>
+          <div class="abi-block">
+            <h3>2. Windows 纤程协同调度（Fiber Scheduler）</h3>
+            <pre class="code-box">ConvertThreadToFiber(nullptr);       // 主游戏线程转为纤程
+scriptFiber = CreateFiber(0, ScriptMain, nullptr);
+// 每帧 Tick:
+if (GetTickCount64() >= wakeAt) SwitchToFiber(scriptFiber);
+// 脚本内 WAIT(ms):
+wakeAt = GetTickCount64() + ms;
+SwitchToFiber(mainFiber);            // 交还控制权给游戏主循环</pre>
+          </div>
+          <div class="abi-block">
+            <h3>3. `scrNativeCallContext` 调用栈布局</h3>
+            <pre class="code-box">nativeInit(uint64_t hash);           // 清空 argCount=0，绑定 handler
+nativePush64(uint64_t val);          // 压入 8 字节对齐参数槽（float/int/ptr）
+uint64_t* nativeCall();              // 触发 NativeHandler(scrNativeCallContext*)，返回结果栈指针</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
