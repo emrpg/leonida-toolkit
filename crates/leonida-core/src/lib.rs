@@ -9,6 +9,7 @@ pub mod coords;
 pub mod error;
 pub mod geo;
 pub mod landmarks;
+pub mod phone;
 pub mod photogrammetry;
 pub mod rage;
 pub mod routing;
@@ -33,6 +34,10 @@ pub use landmarks::{
     id_sort_key, landmark_stats, parse_gta6map_tuple, parse_gtamaplib_vc, Gta6MapTuple,
     GtamaplibVcEntry, GtamaplibVcFile, IrlStatus, Landmark, Landmark3D, LandmarkStats,
     StatusCounts,
+};
+pub use phone::{
+    default_phone_contacts, filter_photos_by_district, messages_for_contact, phone_stats,
+    unread_count, PhoneContact, PhoneMessage, PhoneNote, PhoneStats, SnapmaticPhoto,
 };
 pub use photogrammetry::{
     frustum_polygon, project_world_to_pixel, solve_camera_pose, CameraObs, CameraPose,
