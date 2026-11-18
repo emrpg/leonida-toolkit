@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#ff4fa3" />
+    <link rel="manifest" href="/phone/manifest.webmanifest" />
+    <title>LeonidaOS · 伴侣手机</title>
+  </head>
+  <body>
+    <div id="stage">
+      <div id="phone-shell">
+        <!-- Status Bar -->
+        <div id="status-bar">
+          <span id="sb-time">18:42</span>
+          <span class="notch"></span>
+          <span class="sb-right">5G · 94%</span>
+        </div>
+
+        <!-- Screen -->
+        <div id="screen">
+          <!-- Home Screen -->
+          <section id="app-home" class="app-view active">
+            <div class="home-header">
+              <div class="os-badge">LeonidaOS 2.6</div>
+              <div class="home-widget">
+                <div class="widget-title">State of Leonida</div>
+                <div id="home-summary" class="widget-sub">加载地标与信号中…</div>
+              </div>
+            </div>
+
+            <div class="icon-grid">
+              <button class="app-icon" data-open="radar">
+                <span class="ico ico-radar">🗺️</span>
+                <span>Radar</span>
+              </button>
+              <button class="app-icon" data-open="checklist">
+                <span class="ico ico-check">✅</span>
+                <span>Checklist</span>
+              </button>
+              <button class="app-icon" data-open="messages">
+                <span class="ico ico-msg">💬</span>
+                <span>Messages</span>
+              </button>
+              <button class="app-icon" data-open="snapmatic">
+                <span class="ico ico-snap">📸</span>
+                <span>Snapmatic</span>
+              </button>
+              <button class="app-icon" data-open="notes">
+                <span class="ico ico-notes">📝</span>
+                <span>Notes</span>
+              </button>
+              <button class="app-icon" data-open="challenge">
+                <span class="ico ico-chal">🎯</span>
+                <span>Challenge</span>
+              </button>
+            </div>
+
+            <div class="dock">
+              <button class="dock-btn" data-open="radar" title="Radar">🗺️</button>
+              <button class="dock-btn" data-open="messages" title="Messages">💬</button>
+              <button class="dock-btn" data-open="snapmatic" title="Snapmatic">📸</button>
+              <button class="dock-btn" data-open="checklist" title="Checklist">✅</button>
+            </div>
+          </section>
+
+          <!-- App 1: Radar -->
+          <section id="app-radar" class="app-view">
+            <div class="app-nav">
+              <button class="back-home">‹ 主屏</button>
+              <span class="app-title">Radar 随身地图</span>
+              <button id="radar-route-btn" class="pill-btn">路线</button>
+            </div>
+            <div id="radar-map"></div>
+            <div id="radar-bar" class="radar-bar">点击地图插旗；点“路线”选起终点</div>
+          </section>
+
+          <!-- App 2: Checklist -->
+          <section id="app-checklist" class="app-view">
+            <div class="app-nav">
+              <button class="back-home">‹ 主屏</button>
+              <span class="app-title">Checklist 收集品</span>
+              <span id="check-pct" class="pill-badge">0%</span>
+            </div>
+            <div class="app-scroll">
+              <div class="prog-track"><div id="check-prog" class="prog-fill"></div></div>
+              <div id="check-list" class="stack"></div>
+            </div>
+          </section>
+
+          <!-- App 3: Messages -->
+          <section id="app-messages" class="app-view">
+            <div class="app-nav">
+              <button id="msg-back" class="back-home">‹ 主屏</button>
+              <span id="msg-title" class="app-title">Messages 线人</span>
+              <span></span>
+            </div>
+            <div id="msg-contacts" class="app-scroll stack"></div>
+            <div id="msg-thread" class="msg-thread hidden">
+              <div id="msg-bubbles" class="app-scroll stack"></div>
+              <form id="msg-form" class="msg-compose">
+                <input id="msg-input" placeholder="发送情报消息…" />
+                <button type="submit" class="primary">发送</button>
+              </form>
+            </div>
+          </section>
+
+          <!-- App 4: Snapmatic -->
+          <section id="app-snapmatic" class="app-view">
+            <div class="app-nav">
+              <button class="back-home">‹ 主屏</button>
+              <span class="app-title">Snapmatic 相册</span>
+              <label class="pill-btn">拍照<input id="snap-upload" type="file" accept="image/*" hidden /></label>
+            </div>
+            <div class="app-scroll stack">
+              <div class="card">
+                <input id="snap-title" placeholder="照片标题，如 Ocean View 霓虹" />
+                <div class="row">
+                  <select id="snap-filter">
+                    <option value="none">原图 (None)</option>
+                    <option value="sepia(0.75) contrast(1.1)">复古 (Vintage)</option>
+                    <option value="saturate(1.9) hue-rotate(-15deg)">霓虹 (Vice Neon)</option>
+                    <option value="grayscale(1) contrast(1.25)">黑白 (Noir)</option>
+                  </select>
+                  <button id="snap-save" class="primary">保存地理照片</button>
+                </div>
+              </div>
+              <div id="snap-gallery" class="stack"></div>
+            </div>
+          </section>
+
+          <!-- App 5: Notes -->
+          <section id="app-notes" class="app-view">
+            <div class="app-nav">
+              <button class="back-home">‹ 主屏</button>
+              <span class="app-title">Notes 随身笔记</span>
+              <span></span>
+            </div>
+            <div class="app-scroll stack">
+              <div class="card stack">
+                <input id="note-title" placeholder="笔记标题" />
+                <textarea id="note-body" rows="3" placeholder="记录线索、坐标或待办…"></textarea>
+                <button id="note-save" class="primary">保存笔记（附带当前坐标）</button>
+              </div>
+              <div id="note-list" class="stack"></div>
+            </div>
+          </section>
+
+          <!-- App 6: Challenge -->
+          <section id="app-challenge" class="app-view">
+            <div class="app-nav">
+              <button class="back-home">‹ 主屏</button>
+              <span class="app-title">Challenge 快玩</span>
+              <button id="chal-next" class="pill-btn">下一题</button>
+            </div>
+            <div id="chal-clue" class="chal-clue"></div>
+            <div id="chal-map"></div>
+            <div id="chal-out" class="radar-bar">点击地图猜测位置</div>
+          </section>
+        </div>
+
+        <!-- Home Indicator -->
+        <div id="home-bar"><button id="home-pill" aria-label="Home"></button></div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
