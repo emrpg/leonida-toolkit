@@ -7,7 +7,7 @@ use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
-use leonida_server::core_adapter::LocalCoreEngine;
+use leonida_server::core_adapter::CoreEngine;
 use leonida_server::db::{MarkerStore, MARKERS_SCHEMA};
 use leonida_server::{build_router, AppState};
 
@@ -23,7 +23,7 @@ fn sample_landmarks_json() -> &'static str {
 
 fn test_app_with_dirs(dist_dir: PathBuf, tiles_dir: PathBuf) -> axum::Router {
     let engine = Arc::new(
-        LocalCoreEngine::from_gta6map_json(sample_landmarks_json()).expect("parse sample json"),
+        CoreEngine::from_gta6map_json(sample_landmarks_json()).expect("parse sample json"),
     );
     let markers = MarkerStore::open_in_memory().expect("open in-memory sqlite");
     let tile_manifest = Arc::new(json!({

@@ -11,8 +11,8 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::core_adapter::{
-    IrlStatus, Landmark, LandmarkFilter, LandmarkStats, LatLon, NearestLandmark, Prediction, Ray2D,
-    Triangulation, WorldPoint,
+    parse_irl_status, Landmark, LandmarkFilter, LandmarkStats, LatLon, NearestLandmark, Prediction,
+    Ray2D, Triangulation, WorldPoint,
 };
 use crate::db::{
     CreateMarkerInput, ImportMarkersInput, MarkerBundle, UpdateMarkerInput, UserMarker,
@@ -77,15 +77,15 @@ impl FilterQuery {
         let districts = split_csv(self.district.as_deref());
         let mut statuses = Vec::new();
         for s in split_csv(self.status.as_deref()) {
-            let parsed = IrlStatus::parse(&s)
+            let parsed = parse_irl_status(&s)
                 .ok_or_else(|| AppError::BadRequest(format!("invalid status: {s}")))?;
             statuses.push(parsed);
         }
         Ok(LandmarkFilter {
             text: self.q.filter(|s| !s.trim().is_empty()),
-            tags,
-            statuses,
-            districts,
+            tags: (!tags.is_empty()).then_some(tags),
+            statuses: (!statuses.is_empty()).then_some(statuses),
+            districts: (!districts.is_empty()).then_some(districts),
             positioned_only: self.positioned.unwrap_or(false),
         })
     }
@@ -107,8 +107,7 @@ async fn list_landmarks(
     Query(query): Query<FilterQuery>,
 ) -> Result<Json<Vec<Landmark>>, AppError> {
     let filter = query.into_filter()?;
-    let items: Vec<Landmark> = state.engine.filter(&filter).into_iter().cloned().collect();
-    Ok(Json(items))
+    Ok(Json(state.engine.filter(&filter)))
 }
 
 async fn get_landmark(

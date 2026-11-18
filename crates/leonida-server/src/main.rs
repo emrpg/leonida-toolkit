@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-use leonida_server::core_adapter::LocalCoreEngine;
+use leonida_server::core_adapter::CoreEngine;
 use leonida_server::db::MarkerStore;
 use leonida_server::{build_router, AppState};
 
@@ -34,13 +34,13 @@ async fn main() -> Result<()> {
     let engine = if landmarks_path.exists() {
         let raw = std::fs::read_to_string(&landmarks_path)
             .with_context(|| format!("read {}", landmarks_path.display()))?;
-        Arc::new(LocalCoreEngine::from_gta6map_json(&raw)?)
+        Arc::new(CoreEngine::from_gta6map_json(&raw)?)
     } else {
         tracing::warn!(
             "landmarks file {} not found; starting with empty dataset",
             landmarks_path.display()
         );
-        Arc::new(LocalCoreEngine::from_landmarks(Vec::new()))
+        Arc::new(CoreEngine::from_landmarks(Vec::new()))
     };
 
     let tile_manifest = load_tile_manifest(&data_dir.join("tile-manifest.json"));
