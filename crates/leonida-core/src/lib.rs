@@ -9,6 +9,7 @@ pub mod error;
 pub mod geo;
 pub mod landmarks;
 pub mod search;
+pub mod sol;
 pub mod tiles;
 
 pub use coords::{
@@ -31,6 +32,12 @@ pub use search::{
     filter_landmarks, nearest_landmarks, to_geojson, GeoJsonCrs, GeoJsonCrsProperties,
     GeoJsonFeature, GeoJsonFeatureCollection, GeoJsonLandmarkProperties, GeoJsonPointGeometry,
     LandmarkFilter, NearestLandmark,
+};
+pub use sol::{
+    filter_sol_entries, group_sol_entries_by_dataset, parse_sol_entries,
+    score_screenshot_challenge, sol_dataset_stats, ChallengeGrade, ChallengeScoreResult,
+    ChangelogEntry, NewsItem, NotificationItem, RankInfo, SiteSettings, SolDatasetStats, SolEntry,
+    SolEntryFilter,
 };
 pub use tiles::{
     metres_per_pixel, pixel_to_world, tile_bounds, tile_file_name, tile_for_world, tiles_per_side,
