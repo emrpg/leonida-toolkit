@@ -256,6 +256,45 @@ export interface StudioSettings {
   bgEffects: boolean;
 }
 
+// ---------- v0.4 Types: Photogrammetry & Route Planning ----------
+export interface CameraObs {
+  world_x: number;
+  world_y: number;
+  world_z: number;
+  px: number;
+  py: number;
+  label?: string;
+}
+
+export interface CameraPose {
+  x: number;
+  y: number;
+  z: number;
+  yaw_deg: number;
+  pitch_deg: number;
+  fov_deg: number;
+  rmse_px: number;
+}
+
+export interface PhotogrammetryProject {
+  id?: string;
+  name: string;
+  image_name?: string;
+  width: number;
+  height: number;
+  observations: CameraObs[];
+  pose?: CameraPose;
+  frustum?: [number, number][];
+  created_at?: string;
+}
+
+export interface RouteResult {
+  waypoints: [number, number][];
+  distance_m: number;
+  drive_min: number;
+  fly_min: number;
+}
+
 export function formatDistance(m: number): string {
   if (m >= 1000) return `${(m / 1000).toFixed(2)} km`;
   return `${m.toFixed(0)} m`;

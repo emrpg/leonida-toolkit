@@ -1,6 +1,19 @@
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './style.css';
+import type {
+  CameraObs,
+  CameraPose,
+  ChallengeScoreResult,
+  IrlStatus,
+  Landmark,
+  Landmark3D,
+  PhotogrammetryProject,
+  Ray2D,
+  SolEntry,
+  UserMarker,
+  WorldPoint,
+} from './types';
 import {
   MAX_TILE_Z,
   TILE_SIZE,
@@ -9,18 +22,10 @@ import {
   formatDistance,
   formatWorld,
   idSortKey,
-  type ChallengeScoreResult,
-  type IrlStatus,
-  type Landmark,
-  type Landmark3D,
-  type Ray2D,
-  type SolDatasetKey,
-  type SolEntry,
-  type UserMarker,
-  type WorldPoint,
 } from './types';
 import {
   MarkerClient,
+  deletePhotogrammetryProject,
   fetchChangelog,
   fetchCredits,
   fetchGameStats,
@@ -32,13 +37,18 @@ import {
   fetchNews,
   fetchNotifications,
   fetchRanks,
+  fetchRouteRemote,
   fetchSolDataset,
   fetchTileManifest,
+  listPhotogrammetryProjects,
   markNotificationsRead,
+  savePhotogrammetryProject,
+  solveCameraPoseRemote,
   submitChallengeScore,
 } from './api';
 import { loadLang, saveLang, tr, type I18nKey, type Lang } from './i18n';
 import { DEFAULT_SETTINGS, loadStudioSettings, saveStudioSettings } from './settings';
+import { Leonida3DView } from './view3d';
 import { initLeonidaWasm, type WasmTileResolverHandle } from './wasm-bridge';
 
 // ---------- CRS: Leonida world metres, matching the gta6map tile pyramid ----------
@@ -492,11 +502,22 @@ async function main() {
   });
 
   // ---------- Tools: click-mode state machine ----------
-  type Mode = 'none' | 'measure' | 'area' | 'ray-origin' | 'ray-target' | 'challenge';
+  type Mode =
+    | 'none'
+    | 'measure'
+    | 'area'
+    | 'ray-origin'
+    | 'ray-target'
+    | 'route-start'
+    | 'route-end'
+    | 'challenge';
   let mode: Mode = 'none';
   let measurePts: WorldPoint[] = [];
   const measureLayer = L.layerGroup().addTo(toolLayer);
   const rayLayer = L.layerGroup().addTo(toolLayer);
+  const routeLayer = L.layerGroup().addTo(toolLayer);
+  const photoLayer = L.layerGroup().addTo(toolLayer);
+  let routeStart: WorldPoint | null = null;
   const rays: Ray2D[] = [];
   let rayOrigin: WorldPoint | null = null;
   const setMode = (m: Mode) => {
@@ -571,6 +592,37 @@ async function main() {
     setMode('none');
     drawRays();
   };
+
+  // ---------- Route Planning ----------
+  $('#tool-route').onclick = () => {
+    routeStart = null;
+    routeLayer.clearLayers();
+    setMode('route-start');
+    $('#route-out').textContent = '请点击地图选择起点…';
+  };
+  $('#tool-clear-route').onclick = () => {
+    routeStart = null;
+    routeLayer.clearLayers();
+    setMode('none');
+    $('#route-out').textContent = '';
+  };
+  async function runRoutePlan(start: WorldPoint, end: WorldPoint) {
+    routeLayer.clearLayers();
+    L.circleMarker(toLatLng(start), { radius: 6, color: '#fff', fillColor: '#22c55e', fillOpacity: 1 })
+      .bindTooltip('起点')
+      .addTo(routeLayer);
+    L.circleMarker(toLatLng(end), { radius: 6, color: '#fff', fillColor: '#ef4444', fillOpacity: 1 })
+      .bindTooltip('终点')
+      .addTo(routeLayer);
+    const route =
+      (await fetchRouteRemote(start.x, start.y, end.x, end.y)) ??
+      wasm.planRoute(landmarks, start.x, start.y, end.x, end.y);
+    L.polyline(
+      route.waypoints.map(([x, y]) => toLatLng({ x, y })),
+      { color: '#00e5ff', weight: 4, opacity: 0.9 },
+    ).addTo(routeLayer);
+    $('#route-out').innerHTML = `总里程 <b>${formatDistance(route.distance_m)}</b>（${route.waypoints.length} 节点）<br/>驾车约 <b>${route.drive_min.toFixed(1)} min</b> · 飞行约 <b>${route.fly_min.toFixed(1)} min</b>`;
+  }
 
   // ---------- Screenshot Challenge ----------
   interface ChallengeScene {
@@ -668,6 +720,15 @@ async function main() {
       rayOrigin = null;
       setMode('none');
       drawRays();
+    } else if (mode === 'route-start') {
+      routeStart = p;
+      setMode('route-end');
+      $('#route-out').textContent = '请点击地图选择终点…';
+    } else if (mode === 'route-end' && routeStart) {
+      const s = routeStart;
+      routeStart = null;
+      setMode('none');
+      void runRoutePlan(s, p);
     } else if (mode === 'challenge' && activeScene) {
       challengeLayer.clearLayers();
       const targetPt = { x: activeScene.x, y: activeScene.y };
@@ -927,8 +988,260 @@ async function main() {
     await loadCommunityView();
   };
 
+  // ---------- 3D View ----------
+  let view3d: Leonida3DView | null = null;
+  function ensure3DView() {
+    if (!view3d) {
+      view3d = new Leonida3DView({
+        container: $('#three-canvas-wrap'),
+        landmarks3d,
+        landmarks2d: landmarks,
+        onSelectLandmark: (info) => {
+          $('#three-info').innerHTML = `
+            <div><b>${esc(info.id)} · ${esc(info.name)}</b></div>
+            <div class="muted">坐标: ${info.x.toFixed(0)}, ${info.y.toFixed(0)}${info.height ? ` · 高度 ${info.height.toFixed(0)} m` : ''}</div>
+            <div class="row"><button id="three-jump-2d" class="mini" style="position:static">跳转 2D 地图</button></div>`;
+          $('#three-jump-2d').onclick = () => jumpToCoords(info.x, info.y);
+        },
+      });
+    }
+    setTimeout(() => view3d?.resize(), 50);
+  }
+  $('#three-mode-orbit').onclick = () => {
+    view3d?.setRoamMode(false);
+    $('#three-mode-orbit').classList.add('on');
+    $('#three-mode-roam').classList.remove('on');
+  };
+  $('#three-mode-roam').onclick = () => {
+    view3d?.setRoamMode(true);
+    $('#three-mode-roam').classList.add('on');
+    $('#three-mode-orbit').classList.remove('on');
+  };
+
+  // ---------- Photogrammetry Workbench ----------
+  const photoCanvas = $<HTMLCanvasElement>('#photo-canvas');
+  const photoCtx = photoCanvas.getContext('2d')!;
+  let photoBgImage: HTMLImageElement | null = null;
+  let photoImageName = 'sample-leonida.png';
+  let photoObs: CameraObs[] = [];
+  let lastSolvedPose: CameraPose | null = null;
+  let lastFrustum: [number, number][] | null = null;
+
+  interface LandmarkOption {
+    label: string;
+    x: number;
+    y: number;
+    z: number;
+  }
+  const photoChoices: LandmarkOption[] = [
+    ...landmarks3d.map((l) => ({
+      label: `[3D] ${l.id} ${l.name} (${l.xyz.x.toFixed(0)}, ${l.xyz.y.toFixed(0)}, z=${l.height.toFixed(0)})`,
+      x: l.xyz.x,
+      y: l.xyz.y,
+      z: l.height,
+    })),
+    ...landmarks
+      .filter((l) => l.ig)
+      .map((l) => ({
+        label: `[2D] ${l.id} ${l.name} (${l.ig!.x.toFixed(0)}, ${l.ig!.y.toFixed(0)})`,
+        x: l.ig!.x,
+        y: l.ig!.y,
+        z: 20,
+      })),
+  ];
+  const photoSelect = $<HTMLSelectElement>('#photo-landmark-select');
+  photoSelect.innerHTML = photoChoices.map((c, i) => `<option value="${i}">${esc(c.label)}</option>`).join('');
+
+  function drawPhotoCanvas() {
+    const w = photoCanvas.width;
+    const h = photoCanvas.height;
+    photoCtx.clearRect(0, 0, w, h);
+    if (photoBgImage) {
+      photoCtx.drawImage(photoBgImage, 0, 0, w, h);
+    } else {
+      const grad = photoCtx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#181030');
+      grad.addColorStop(0.55, '#2b193d');
+      grad.addColorStop(1, '#0d1526');
+      photoCtx.fillStyle = grad;
+      photoCtx.fillRect(0, 0, w, h);
+      photoCtx.strokeStyle = 'rgba(0, 229, 255, 0.16)';
+      for (let gx = 0; gx < w; gx += 40) {
+        photoCtx.beginPath();
+        photoCtx.moveTo(gx, 0);
+        photoCtx.lineTo(gx, h);
+        photoCtx.stroke();
+      }
+      for (let gy = 0; gy < h; gy += 40) {
+        photoCtx.beginPath();
+        photoCtx.moveTo(0, gy);
+        photoCtx.lineTo(w, gy);
+        photoCtx.stroke();
+      }
+      photoCtx.fillStyle = 'rgba(255,255,255,0.55)';
+      photoCtx.font = '14px sans-serif';
+      photoCtx.fillText('点击画面添加像素观测点（可先上传真实截图或点击下方控制点）', 20, 32);
+    }
+    photoObs.forEach((o, idx) => {
+      photoCtx.beginPath();
+      photoCtx.arc(o.px, o.py, 7, 0, Math.PI * 2);
+      photoCtx.fillStyle = '#ff4fa3';
+      photoCtx.fill();
+      photoCtx.lineWidth = 2;
+      photoCtx.strokeStyle = '#ffffff';
+      photoCtx.stroke();
+      photoCtx.fillStyle = '#ffffff';
+      photoCtx.font = 'bold 12px monospace';
+      photoCtx.fillText(`${idx + 1}`, o.px + 10, o.py + 4);
+    });
+  }
+
+  function renderPhotoObsList() {
+    const ul = $('#photo-obs-list');
+    ul.innerHTML = photoObs.length
+      ? ''
+      : `<li class="muted">暂无控制点，请在左侧画布点击并绑定地标（至少 3 个）。</li>`;
+    photoObs.forEach((o, i) => {
+      const li = document.createElement('li');
+      li.innerHTML = `<span>#${i + 1} (${o.px.toFixed(0)}, ${o.py.toFixed(0)}) → ${esc(o.label ?? '')}</span>`;
+      const del = document.createElement('button');
+      del.textContent = '删除';
+      del.onclick = () => {
+        photoObs.splice(i, 1);
+        renderPhotoObsList();
+        drawPhotoCanvas();
+      };
+      li.appendChild(del);
+      ul.appendChild(li);
+    });
+  }
+
+  async function renderPhotoProjects() {
+    const projects = await listPhotogrammetryProjects();
+    const ul = $('#photo-projects-list');
+    ul.innerHTML = projects.length ? '' : `<li class="muted">暂无已保存的标定工程。</li>`;
+    for (const pr of projects) {
+      const li = document.createElement('li');
+      li.innerHTML = `<span><b>${esc(pr.name)}</b> (${pr.observations.length} 点)</span>`;
+      const row = document.createElement('span');
+      const loadBtn = document.createElement('button');
+      loadBtn.textContent = '载入';
+      loadBtn.onclick = () => {
+        photoObs = [...pr.observations];
+        lastSolvedPose = pr.pose ?? null;
+        lastFrustum = pr.frustum ?? null;
+        renderPhotoObsList();
+        drawPhotoCanvas();
+        if (lastSolvedPose) showSolvedPoseOnUI(lastSolvedPose, lastFrustum ?? undefined);
+      };
+      const delBtn = document.createElement('button');
+      delBtn.textContent = '删除';
+      delBtn.onclick = async () => {
+        if (pr.id) await deletePhotogrammetryProject(pr.id);
+        await renderPhotoProjects();
+      };
+      row.append(loadBtn, delBtn);
+      li.appendChild(row);
+      ul.appendChild(li);
+    }
+  }
+
+  function showSolvedPoseOnUI(pose: CameraPose, frustum?: [number, number][]) {
+    lastSolvedPose = pose;
+    lastFrustum =
+      frustum ?? wasm.frustumPolygon(pose.x, pose.y, pose.yaw_deg, pose.fov_deg, 2500);
+    $('#photo-out').innerHTML = `相机位置 <b>${formatWorld(pose)}</b> · Z=${pose.z.toFixed(1)} m<br/>Yaw ${pose.yaw_deg.toFixed(1)}° · Pitch ${pose.pitch_deg.toFixed(1)}° · FOV ${pose.fov_deg.toFixed(1)}° · RMSE ${pose.rmse_px.toFixed(1)} px`;
+    ($<HTMLButtonElement>('#photo-show-on-map')).disabled = false;
+    photoLayer.clearLayers();
+    L.polygon(
+      lastFrustum.map(([x, y]) => toLatLng({ x, y })),
+      { color: '#ffb347', weight: 2, fillColor: '#ffb347', fillOpacity: 0.2 },
+    ).addTo(photoLayer);
+    L.circleMarker(toLatLng(pose), { radius: 7, color: '#fff', fillColor: '#ffb347', fillOpacity: 1 })
+      .bindTooltip(`相机位置 (${pose.yaw_deg.toFixed(0)}°)`)
+      .addTo(photoLayer);
+  }
+
+  photoCanvas.addEventListener('click', (e) => {
+    const rect = photoCanvas.getBoundingClientRect();
+    const px = ((e.clientX - rect.left) / rect.width) * photoCanvas.width;
+    const py = ((e.clientY - rect.top) / rect.height) * photoCanvas.height;
+    const choice = photoChoices[Number(photoSelect.value)] ?? photoChoices[0];
+    if (!choice) return;
+    photoObs.push({
+      world_x: choice.x,
+      world_y: choice.y,
+      world_z: choice.z,
+      px,
+      py,
+      label: choice.label.slice(0, 28),
+    });
+    renderPhotoObsList();
+    drawPhotoCanvas();
+  });
+
+  $<HTMLInputElement>('#photo-upload').onchange = (e) => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (!f) return;
+    photoImageName = f.name;
+    const img = new Image();
+    img.onload = () => {
+      photoBgImage = img;
+      photoCanvas.width = Math.min(1280, img.naturalWidth || 800);
+      photoCanvas.height = Math.round(
+        photoCanvas.width * ((img.naturalHeight || 450) / (img.naturalWidth || 800)),
+      );
+      drawPhotoCanvas();
+    };
+    img.src = URL.createObjectURL(f);
+  };
+  $('#photo-sample').onclick = () => {
+    photoBgImage = null;
+    photoImageName = 'sample-leonida.png';
+    photoCanvas.width = 800;
+    photoCanvas.height = 450;
+    drawPhotoCanvas();
+  };
+  $('#photo-solve').onclick = async () => {
+    if (photoObs.length < 3) {
+      $('#photo-out').textContent = '请至少标定 3 个控制点';
+      return;
+    }
+    const fov = Number($<HTMLInputElement>('#photo-fov').value) || 60;
+    const remote = await solveCameraPoseRemote(photoObs, photoCanvas.width, photoCanvas.height, fov);
+    if (remote?.pose) {
+      showSolvedPoseOnUI(remote.pose, remote.frustum);
+      return;
+    }
+    const localPose = wasm.solveCameraPose(photoObs, photoCanvas.width, photoCanvas.height, fov);
+    if (!localPose) {
+      $('#photo-out').textContent = '解算失败，请检查控制点分布';
+      return;
+    }
+    showSolvedPoseOnUI(localPose);
+  };
+  $('#photo-show-on-map').onclick = () => {
+    if (!lastSolvedPose) return;
+    jumpToCoords(lastSolvedPose.x, lastSolvedPose.y);
+  };
+  $('#photo-save').onclick = async () => {
+    const name = $<HTMLInputElement>('#photo-project-name').value.trim() || `标定工程 ${Date.now()}`;
+    await savePhotogrammetryProject({
+      name,
+      image_name: photoImageName,
+      width: photoCanvas.width,
+      height: photoCanvas.height,
+      observations: photoObs,
+      pose: lastSolvedPose ?? undefined,
+      frustum: lastFrustum ?? undefined,
+    });
+    await renderPhotoProjects();
+  };
+  drawPhotoCanvas();
+  renderPhotoObsList();
+
   // ---------- Topbar Module Switching ----------
-  type ModuleName = 'map' | 'challenge' | 'media' | 'news' | 'community';
+  type ModuleName = 'map' | 'view3d' | 'photo' | 'challenge' | 'media' | 'news' | 'community';
   function switchModule(mod: ModuleName) {
     document.querySelectorAll('#studio-nav button').forEach((b) => {
       b.classList.toggle('active', (b as HTMLElement).dataset.module === mod);
@@ -948,6 +1261,12 @@ async function main() {
         setMode('none');
       }
       setTimeout(() => map.invalidateSize(), 50);
+    } else if (mod === 'view3d') {
+      $('#view-3d').classList.add('active');
+      ensure3DView();
+    } else if (mod === 'photo') {
+      $('#view-photo').classList.add('active');
+      void renderPhotoProjects();
     } else if (mod === 'media') {
       $('#view-media').classList.add('active');
       if (!mediaLoaded) loadMediaView();

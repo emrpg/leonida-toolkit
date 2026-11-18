@@ -1,5 +1,7 @@
 import initWasm, * as wasmModule from './wasm/leonida_wasm';
 import type {
+  CameraObs,
+  CameraPose,
   ChallengeScoreResult,
   Gta6MapTuple,
   GtamaplibVcFile,
@@ -11,6 +13,7 @@ import type {
   NearestLandmark,
   Prediction,
   Ray2D,
+  RouteResult,
   TileCoord,
   TileManifest,
   TileSource,
@@ -56,6 +59,26 @@ export interface LeonidaWasmEngine {
     guessX: number,
     guessY: number,
   ): ChallengeScoreResult;
+  solveCameraPose(
+    obs: readonly CameraObs[],
+    width: number,
+    height: number,
+    fovDeg?: number,
+  ): CameraPose | null;
+  frustumPolygon(
+    x: number,
+    y: number,
+    yawDeg: number,
+    fovDeg: number,
+    rangeM?: number,
+  ): [number, number][];
+  planRoute(
+    landmarks: readonly Landmark[],
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+  ): RouteResult;
 }
 
 function wrapLandmarksHandle(inner: InstanceType<typeof WasmLandmarks>): WasmLandmarksHandle {
@@ -110,6 +133,181 @@ function fallbackScoreChallenge(
   return { distance_m, score, grade };
 }
 
+function fallbackFrustumPolygon(
+  x: number,
+  y: number,
+  yawDeg: number,
+  fovDeg: number,
+  rangeM = 2500,
+): [number, number][] {
+  const pts: [number, number][] = [[x, y]];
+  const steps = 16;
+  const half = fovDeg / 2;
+  for (let i = 0; i <= steps; i++) {
+    const a = ((yawDeg - half + (fovDeg * i) / steps) * Math.PI) / 180;
+    pts.push([x + Math.sin(a) * rangeM, y + Math.cos(a) * rangeM]);
+  }
+  return pts;
+}
+
+function fallbackSolveCameraPose(
+  obs: readonly CameraObs[],
+  width: number,
+  height: number,
+  fovDeg = 60,
+): CameraPose | null {
+  if (obs.length < 3) return null;
+  // Initial centroid estimate offset south by ~1000 m
+  const cx = obs.reduce((s, o) => s + o.world_x, 0) / obs.length;
+  const cy = obs.reduce((s, o) => s + o.world_y, 0) / obs.length;
+  const cz = obs.reduce((s, o) => s + o.world_z, 0) / obs.length;
+  let camX = cx;
+  let camY = cy - 1000;
+  let camZ = Math.max(50, cz + 80);
+  let yaw = 0;
+  let pitch = -5;
+  const f = (width / 2) / Math.tan(((fovDeg / 2) * Math.PI) / 180);
+
+  const project = (o: CameraObs, x: number, y: number, z: number, yawD: number, pitchD: number) => {
+    const yr = (yawD * Math.PI) / 180;
+    const pr = (pitchD * Math.PI) / 180;
+    const dx = o.world_x - x;
+    const dy = o.world_y - y;
+    const dz = o.world_z - z;
+    // Camera forward = (sin(yaw)*cos(pitch), cos(yaw)*cos(pitch), sin(pitch))
+    const rx = dx * Math.cos(yr) - dy * Math.sin(yr);
+    const fwd0 = dx * Math.sin(yr) + dy * Math.cos(yr);
+    const fwd = fwd0 * Math.cos(pr) + dz * Math.sin(pr);
+    const up = -fwd0 * Math.sin(pr) + dz * Math.cos(pr);
+    const depth = Math.max(10, fwd);
+    return { u: width / 2 + (rx / depth) * f, v: height / 2 - (up / depth) * f };
+  };
+
+  // Simple coordinate-descent refinement
+  const steps = [200, 50, 10, 2];
+  const angSteps = [15, 4, 1, 0.25];
+  const errOf = (x: number, y: number, z: number, yw: number, pt: number) =>
+    obs.reduce((s, o) => {
+      const p = project(o, x, y, z, yw, pt);
+      return s + (p.u - o.px) ** 2 + (p.v - o.py) ** 2;
+    }, 0);
+
+  for (let pass = 0; pass < steps.length; pass++) {
+    const st = steps[pass]!;
+    const ast = angSteps[pass]!;
+    for (let iter = 0; iter < 4; iter++) {
+      for (const d of [-st, st]) {
+        if (errOf(camX + d, camY, camZ, yaw, pitch) < errOf(camX, camY, camZ, yaw, pitch)) camX += d;
+        if (errOf(camX, camY + d, camZ, yaw, pitch) < errOf(camX, camY, camZ, yaw, pitch)) camY += d;
+        if (camZ + d >= 5 && errOf(camX, camY, camZ + d, yaw, pitch) < errOf(camX, camY, camZ, yaw, pitch))
+          camZ += d;
+      }
+      for (const da of [-ast, ast]) {
+        if (errOf(camX, camY, camZ, yaw + da, pitch) < errOf(camX, camY, camZ, yaw, pitch)) yaw += da;
+        if (
+          Math.abs(pitch + da) <= 80 &&
+          errOf(camX, camY, camZ, yaw, pitch + da) < errOf(camX, camY, camZ, yaw, pitch)
+        )
+          pitch += da;
+      }
+    }
+  }
+  const rmse_px = Math.sqrt(errOf(camX, camY, camZ, yaw, pitch) / obs.length);
+  return {
+    x: camX,
+    y: camY,
+    z: camZ,
+    yaw_deg: ((yaw % 360) + 360) % 360,
+    pitch_deg: pitch,
+    fov_deg: fovDeg,
+    rmse_px,
+  };
+}
+
+function fallbackPlanRoute(
+  landmarks: readonly Landmark[],
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): RouteResult {
+  const nodes: WorldPoint[] = [{ x: x1, y: y1 }];
+  for (const l of landmarks) {
+    if (l.ig) nodes.push(l.ig);
+  }
+  const endIdx = nodes.length;
+  nodes.push({ x: x2, y: y2 });
+
+  const n = nodes.length;
+  const dist = new Float64Array(n).fill(Infinity);
+  const prev = new Int32Array(n).fill(-1);
+  const visited = new Uint8Array(n);
+  dist[0] = 0;
+
+  // Build sparse KNN edges (k = 6) + direct start-end fallback
+  const adj: Array<Array<[number, number]>> = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    const a = nodes[i]!;
+    const nbrs: Array<[number, number]> = [];
+    for (let j = 0; j < n; j++) {
+      if (i === j) continue;
+      const b = nodes[j]!;
+      const d = Math.hypot(b.x - a.x, b.y - a.y);
+      if (d <= 2200 || j === endIdx || i === 0) nbrs.push([j, d]);
+    }
+    nbrs.sort((u, v) => u[1] - v[1]);
+    for (const [j, d] of nbrs.slice(0, 8)) {
+      adj[i]!.push([j, d]);
+      adj[j]!.push([i, d]);
+    }
+  }
+
+  for (let step = 0; step < n; step++) {
+    let u = -1;
+    let best = Infinity;
+    for (let i = 0; i < n; i++) {
+      if (!visited[i] && dist[i]! < best) {
+        best = dist[i]!;
+        u = i;
+      }
+    }
+    if (u === -1 || u === endIdx) break;
+    visited[u] = 1;
+    for (const [v, w] of adj[u]!) {
+      const nd = best + w;
+      if (nd < dist[v]!) {
+        dist[v] = nd;
+        prev[v] = u;
+      }
+    }
+  }
+
+  const waypoints: [number, number][] = [];
+  if (Number.isFinite(dist[endIdx]!)) {
+    let cur = endIdx;
+    while (cur !== -1) {
+      const p = nodes[cur]!;
+      waypoints.push([p.x, p.y]);
+      cur = prev[cur]!;
+    }
+    waypoints.reverse();
+  } else {
+    waypoints.push([x1, y1], [x2, y2]);
+  }
+  let total = 0;
+  for (let i = 1; i < waypoints.length; i++) {
+    const a = waypoints[i - 1]!;
+    const b = waypoints[i]!;
+    total += Math.hypot(b[0] - a[0], b[1] - a[1]);
+  }
+  return {
+    waypoints,
+    distance_m: total,
+    drive_min: total / (70_000 / 60),
+    fly_min: total / (220_000 / 60),
+  };
+}
+
 let initPromise: Promise<LeonidaWasmEngine> | null = null;
 
 export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
@@ -141,6 +339,36 @@ export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
           typeof maybeWasmScore === 'function'
             ? maybeWasmScore(tx, ty, gx, gy)
             : fallbackScoreChallenge(tx, ty, gx, gy),
+        solveCameraPose: (obs, width, height, fovDeg = 60) => {
+          const fn = (wasmModule as unknown as {
+            solve_camera_pose?: (o: unknown, w: number, h: number, f?: number) => CameraPose | null;
+          }).solve_camera_pose;
+          return typeof fn === 'function'
+            ? (fn(obs, width, height, fovDeg) ?? null)
+            : fallbackSolveCameraPose(obs, width, height, fovDeg);
+        },
+        frustumPolygon: (x, y, yawDeg, fovDeg, rangeM = 2500) => {
+          const fn = (wasmModule as unknown as {
+            frustum_polygon?: (
+              x: number,
+              y: number,
+              yaw: number,
+              fov: number,
+              r?: number,
+            ) => [number, number][];
+          }).frustum_polygon;
+          return typeof fn === 'function'
+            ? fn(x, y, yawDeg, fovDeg, rangeM)
+            : fallbackFrustumPolygon(x, y, yawDeg, fovDeg, rangeM);
+        },
+        planRoute: (landmarks, x1, y1, x2, y2) => {
+          const fn = (wasmModule as unknown as {
+            plan_route?: (x1: number, y1: number, x2: number, y2: number) => RouteResult;
+          }).plan_route;
+          return typeof fn === 'function'
+            ? fn(x1, y1, x2, y2)
+            : fallbackPlanRoute(landmarks, x1, y1, x2, y2);
+        },
       };
     });
   }

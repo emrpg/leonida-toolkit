@@ -24,6 +24,8 @@
 
         <nav id="studio-nav">
           <button data-module="map" class="active" data-i18n="navMap">互动地图</button>
+          <button data-module="view3d" data-i18n="nav3d">3D 视界</button>
+          <button data-module="photo" data-i18n="navPhoto">摄影测量</button>
           <button data-module="challenge" data-i18n="navChallenge">猜图挑战</button>
           <button data-module="media" data-i18n="navMedia">媒体库</button>
           <button data-module="news" data-i18n="navNews">新闻与日志</button>
@@ -91,6 +93,14 @@
               <div class="row">
                 <button id="export-geojson" data-i18n="exportGeoJson">导出当前筛选 GeoJSON</button>
               </div>
+
+              <h3 data-i18n="routeTitle">路线规划</h3>
+              <p class="muted" data-i18n="routeHint">依次点击地图上的起点与终点，自动规划地标连通路径并估算驾车/飞行耗时。</p>
+              <div class="row">
+                <button id="tool-route" data-i18n="routeStart">选择起终点</button>
+                <button id="tool-clear-route" data-i18n="routeClear">清除路线</button>
+              </div>
+              <div id="route-out" class="out"></div>
             </section>
 
             <section id="tab-mine" class="tab">
@@ -130,6 +140,62 @@
           <main id="map"></main>
           <div id="coords" class="muted"></div>
         </div>
+
+        <!-- 3D View -->
+        <section id="view-3d" class="module-view">
+          <div id="three-canvas-wrap"></div>
+          <div id="three-hud" class="glass-card">
+            <div class="row">
+              <button id="three-mode-orbit" class="chip on">轨道模式 (Orbit)</button>
+              <button id="three-mode-roam" class="chip">第一人称漫游 (WASD)</button>
+            </div>
+            <div id="three-info" class="muted">点击任意 3D 地标柱查看高度与坐标（共 107 个 3D 地标）。</div>
+          </div>
+        </section>
+
+        <!-- Photogrammetry Workbench -->
+        <section id="view-photo" class="module-view page-view">
+          <div class="page-inner">
+            <div class="page-head">
+              <div>
+                <h2 data-i18n="photoTitle">摄影测量相机标定工作台</h2>
+                <p class="muted" data-i18n="photoHint">上传或选择截图，点击画面标定像素点并绑定 3D/2D 地标，解算相机位置并在地图绘制 FOV 视锥。</p>
+              </div>
+              <div class="row">
+                <label class="btn">上传截图<input id="photo-upload" type="file" accept="image/*" hidden /></label>
+                <button id="photo-sample">生成示例标定图</button>
+              </div>
+            </div>
+            <div class="two-col">
+              <div>
+                <div class="glass-card">
+                  <canvas id="photo-canvas" width="800" height="450"></canvas>
+                </div>
+                <div class="row" style="margin-top:10px">
+                  <select id="photo-landmark-select"></select>
+                  <input id="photo-fov" type="number" value="60" min="20" max="120" style="max-width:90px" title="Initial FOV (deg)" />
+                  <button id="photo-solve" class="primary">解算相机位姿</button>
+                  <button id="photo-show-on-map" disabled>在地图查看视锥</button>
+                </div>
+                <div id="photo-out" class="out" style="margin-top:8px"></div>
+              </div>
+              <div class="stack">
+                <div class="glass-card">
+                  <h3>标定控制点（≥3 个点）</h3>
+                  <ul id="photo-obs-list" class="obs-list"></ul>
+                </div>
+                <div class="glass-card">
+                  <h3>标定工程持久化 (/api/photogrammetry/projects)</h3>
+                  <div class="row">
+                    <input id="photo-project-name" placeholder="工程名称，如 Vice Beach 视锥分析" />
+                    <button id="photo-save">保存工程</button>
+                  </div>
+                  <ul id="photo-projects-list" class="obs-list"></ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <!-- Media Library View -->
         <section id="view-media" class="module-view page-view">

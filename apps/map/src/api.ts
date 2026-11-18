@@ -1,4 +1,6 @@
 import type {
+  CameraObs,
+  CameraPose,
   ChangelogItem,
   GameStats,
   Gta6MapTuple,
@@ -8,7 +10,9 @@ import type {
   MediaTabInfo,
   NewsItem,
   NotificationItem,
+  PhotogrammetryProject,
   RankInfo,
+  RouteResult,
   SolDatasetKey,
   SolEntry,
   TileManifest,
@@ -453,5 +457,119 @@ export class MarkerClient {
       }
     }
     return { schema: 'leonida-user-markers-v1', markers: [...current] };
+  }
+}
+
+// ---------- v0.4 Photogrammetry & Route APIs ----------
+const LOCAL_PHOTO_KEY = 'sol.photogrammetry.projects.v1';
+
+function loadLocalProjects(): PhotogrammetryProject[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_PHOTO_KEY);
+    return raw ? (JSON.parse(raw) as PhotogrammetryProject[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalProjects(items: PhotogrammetryProject[]): void {
+  try {
+    localStorage.setItem(LOCAL_PHOTO_KEY, JSON.stringify(items));
+  } catch {
+    // ignore
+  }
+}
+
+export async function solveCameraPoseRemote(
+  observations: CameraObs[],
+  width: number,
+  height: number,
+  fov_deg = 60,
+): Promise<{ pose: CameraPose; frustum?: [number, number][] } | null> {
+  try {
+    return await fetchJson<{ pose: CameraPose; frustum?: [number, number][] }>(
+      '/api/photogrammetry/solve',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ observations, width, height, fov_deg }),
+      },
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function listPhotogrammetryProjects(): Promise<PhotogrammetryProject[]> {
+  try {
+    const raw = await fetchJson<unknown>('/api/photogrammetry/projects');
+    const arr = unwrapArray<PhotogrammetryProject>(raw, ['projects', 'items', 'data']);
+    if (Array.isArray(raw) || (raw && typeof raw === 'object' && 'projects' in raw)) {
+      saveLocalProjects(arr);
+      return arr;
+    }
+  } catch {
+    // fallback
+  }
+  return loadLocalProjects();
+}
+
+export async function savePhotogrammetryProject(
+  project: PhotogrammetryProject,
+): Promise<PhotogrammetryProject> {
+  const localItem: PhotogrammetryProject = {
+    ...project,
+    id: project.id || crypto.randomUUID(),
+    created_at: project.created_at || new Date().toISOString(),
+  };
+  try {
+    const res = await fetchJson<PhotogrammetryProject | { project: PhotogrammetryProject }>(
+      '/api/photogrammetry/projects',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(localItem),
+      },
+    );
+    const saved = 'project' in res && res.project ? res.project : (res as PhotogrammetryProject);
+    const item = saved?.id ? saved : localItem;
+    saveLocalProjects([...loadLocalProjects().filter((p) => p.id !== item.id), item]);
+    return item;
+  } catch {
+    saveLocalProjects([...loadLocalProjects().filter((p) => p.id !== localItem.id), localItem]);
+    return localItem;
+  }
+}
+
+export async function deletePhotogrammetryProject(id: string): Promise<void> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    try {
+      await fetch(`/api/photogrammetry/projects/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // ignore offline
+  }
+  saveLocalProjects(loadLocalProjects().filter((p) => p.id !== id));
+}
+
+export async function fetchRouteRemote(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): Promise<RouteResult | null> {
+  try {
+    return await fetchJson<RouteResult>(
+      `/api/route?x1=${encodeURIComponent(x1)}&y1=${encodeURIComponent(y1)}&x2=${encodeURIComponent(x2)}&y2=${encodeURIComponent(y2)}`,
+    );
+  } catch {
+    return null;
   }
 }
