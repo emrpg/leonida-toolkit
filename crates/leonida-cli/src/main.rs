@@ -1,3 +1,4 @@
+mod phone;
 mod rage;
 mod sol;
 mod v04;
@@ -155,6 +156,8 @@ enum Commands {
     },
     /// RAGE asset/config tools (RPF7/RPF8, RSC7, JOAAT, handling.meta)
     Rage(rage::RageArgs),
+    /// LeonidaOS companion phone app diagnostics & stats
+    Phone(phone::PhoneArgs),
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -589,6 +592,7 @@ fn main() -> Result<()> {
             json,
         } => run_solve_camera(width, height, fov, &obs, json),
         Commands::Rage(args) => rage::run_rage(args),
+        Commands::Phone(args) => phone::run_phone(args),
     }
 }
 
@@ -888,5 +892,37 @@ mod tests {
         let rsc = rage::parse_rsc7_header(&rsc_bytes).unwrap();
         assert_eq!(rsc.version, 13);
         assert!(rsc.system_size > 0);
+    }
+
+    #[test]
+    fn phone_stats_on_temp_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "leonida-phone-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let wasm_dir = base.join("apps/phone/src/wasm");
+        let data_dir = base.join("apps/map/public/data");
+        fs::create_dir_all(&wasm_dir).unwrap();
+        fs::create_dir_all(&data_dir).unwrap();
+        fs::write(wasm_dir.join("leonida_wasm.js"), "// js").unwrap();
+        fs::write(wasm_dir.join("leonida_wasm_bg.wasm"), b"wasm").unwrap();
+        fs::write(data_dir.join("markers.json"), "[]").unwrap();
+        fs::write(
+            data_dir.join("gta6map-landmarks.json"),
+            r#"[["b1","?, Vice Beach",[100,200],0,"Hotel",[25.8,-80.1],0,["hotel"],"112233",1.0]]"#,
+        )
+        .unwrap();
+
+        let report = phone::collect_phone_stats(&base, None).unwrap();
+        assert!(report.wasm_ready);
+        assert_eq!(report.wasm_bytes, 4);
+        assert_eq!(report.sol_datasets_present, 1);
+        assert_eq!(report.total_landmarks, 1);
+        assert_eq!(report.positioned_landmarks, 1);
+
+        let _ = fs::remove_dir_all(&base);
     }
 }
