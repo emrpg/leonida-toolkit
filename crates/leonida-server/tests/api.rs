@@ -21,7 +21,12 @@ fn sample_landmarks_json() -> &'static str {
     ]"#
 }
 
-fn test_app_with_dirs(dist_dir: PathBuf, tiles_dir: PathBuf, data_dir: PathBuf) -> axum::Router {
+fn test_app_with_dirs(
+    dist_dir: PathBuf,
+    tiles_dir: PathBuf,
+    data_dir: PathBuf,
+    phone_dist_dir: PathBuf,
+) -> axum::Router {
     let engine = Arc::new(
         CoreEngine::from_gta6map_json(sample_landmarks_json()).expect("parse sample json"),
     );
@@ -37,12 +42,13 @@ fn test_app_with_dirs(dist_dir: PathBuf, tiles_dir: PathBuf, data_dir: PathBuf) 
         dist_dir,
         tiles_dir,
         data_dir,
+        phone_dist_dir,
     })
 }
 
 fn test_app() -> axum::Router {
     let tmp = std::env::temp_dir();
-    test_app_with_dirs(tmp.clone(), tmp.clone(), tmp)
+    test_app_with_dirs(tmp.clone(), tmp.clone(), tmp.clone(), tmp)
 }
 
 async fn body_json(res: axum::response::Response) -> Value {
@@ -393,7 +399,7 @@ async fn static_dist_and_tiles_with_cache_headers() {
     std::fs::write(dist_dir.join("index.html"), "<html>Leonida Map</html>").unwrap();
     std::fs::write(tiles_dir.join("dupzor,51/0/0,0,0.jpg"), b"fakejpg").unwrap();
 
-    let app = test_app_with_dirs(dist_dir, tiles_dir, base.clone());
+    let app = test_app_with_dirs(dist_dir, tiles_dir, base.clone(), base.clone());
 
     let res = app
         .clone()
@@ -746,6 +752,197 @@ async fn rage_inspect_header_and_handling_roundtrip() {
 }
 
 #[tokio::test]
+async fn phone_contacts_messages_notes_photos_crud() {
+    let app = test_app();
+
+    // Contacts
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/phone/contacts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let contacts = body_json(res).await;
+    assert_eq!(contacts["contacts"].as_array().unwrap().len(), 5);
+
+    // Messages
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/phone/messages")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "contactId": "lucia", "text": "Heading to Vice Beach" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/phone/messages?contact_id=lucia")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let msgs = body_json(res).await;
+    assert_eq!(msgs["messages"].as_array().unwrap().len(), 2);
+
+    // Notes CRUD
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/phone/notes")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "title": "Boat Dock",
+                        "body": "Check at midnight",
+                        "x": 1200.0,
+                        "y": 2400.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let note_id = body_json(res).await["note"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/phone/notes")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["notes"].as_array().unwrap().len(), 1);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/phone/notes?id={note_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/phone/notes/{note_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Photos CRUD
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/phone/photos")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "title": "Ocean Drive Sunset",
+                        "district": "Vice Beach",
+                        "x": 1400.0,
+                        "y": 2700.0,
+                        "filter": "warm",
+                        "caption": "Palm trees",
+                        "imageDataUrl": "data:image/png;base64,iVBORw0KGgo="
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let photo_id = body_json(res).await["photo"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/api/phone/photos")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["photos"].as_array().unwrap().len(), 1);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::delete(format!("/api/phone/photos/{photo_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let res = app
+        .oneshot(
+            Request::delete(format!("/api/phone/photos/{photo_id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn phone_static_hosting() {
+    let base = std::env::temp_dir().join(format!("leonida-phone-test-{}", uuid::Uuid::new_v4()));
+    let phone_dist = base.join("phone_dist");
+    std::fs::create_dir_all(&phone_dist).unwrap();
+    std::fs::write(
+        phone_dist.join("index.html"),
+        "<html>LeonidaOS Phone</html>",
+    )
+    .unwrap();
+
+    let app = test_app_with_dirs(base.clone(), base.clone(), base.clone(), phone_dist);
+
+    let res = app
+        .oneshot(Request::get("/phone/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&body[..], b"<html>LeonidaOS Phone</html>");
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
 async fn sol_auth_api_public_and_markers() {
     let app = test_app();
 
@@ -977,7 +1174,7 @@ async fn sol_media_files_and_static_data() {
     )
     .unwrap();
 
-    let app = test_app_with_dirs(dist_dir, tiles_dir, data_dir);
+    let app = test_app_with_dirs(dist_dir, tiles_dir, data_dir, base.clone());
 
     let res = app
         .clone()

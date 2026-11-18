@@ -24,6 +24,7 @@ async fn main() -> Result<()> {
     let data_dir = env_path("GTA6MAP_DATA", "apps/map/public/data");
     let tiles_dir = env_path("GTA6MAP_TILES", "apps/map/public/tiles");
     let dist_dir = env_path("GTA6MAP_DIST", "apps/map/dist");
+    let phone_dist_dir = env_path("LEONIDA_PHONE_DIST", "apps/phone/dist");
     let db_path = env_path("LEONIDA_DB", "data/leonida-markers.db");
     let addr: SocketAddr = env::var("LEONIDA_ADDR")
         .unwrap_or_else(|_| "0.0.0.0:8080".to_string())
@@ -53,6 +54,7 @@ async fn main() -> Result<()> {
         dist_dir: dist_dir.clone(),
         tiles_dir: tiles_dir.clone(),
         data_dir,
+        phone_dist_dir,
     };
 
     let app = build_router(state);

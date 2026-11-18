@@ -131,6 +131,41 @@ impl MarkerStore {
                  id TEXT PRIMARY KEY,
                  completed INTEGER NOT NULL DEFAULT 0,
                  updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS phone_contacts (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 role TEXT NOT NULL,
+                 district TEXT NOT NULL,
+                 avatar_color TEXT NOT NULL,
+                 bio TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS phone_messages (
+                 id TEXT PRIMARY KEY,
+                 contact_id TEXT NOT NULL,
+                 sender TEXT NOT NULL,
+                 text TEXT NOT NULL,
+                 timestamp INTEGER NOT NULL,
+                 unread INTEGER NOT NULL DEFAULT 0
+             );
+             CREATE TABLE IF NOT EXISTS phone_notes (
+                 id TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 x REAL,
+                 y REAL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS phone_photos (
+                 id TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 district TEXT NOT NULL,
+                 x REAL NOT NULL,
+                 y REAL NOT NULL,
+                 filter TEXT NOT NULL,
+                 caption TEXT NOT NULL,
+                 image_data_url TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
              );",
         )
         .context("initialize sqlite schema")?;
@@ -146,6 +181,83 @@ impl MarkerStore {
                     "State of Leonida v0.3",
                     "Interactive map, media archive, and Screenshot Challenge are live.",
                     now_unix_millis()
+                ],
+            )?;
+        }
+
+        let contact_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM phone_contacts", [], |r| r.get(0))?;
+        if contact_count == 0 {
+            let defaults = [
+                (
+                    "lucia",
+                    "Lucia Caminos",
+                    "Partner",
+                    "Vice Beach",
+                    "#ff4d6d",
+                    "Co-pilot and Leonida field scout.",
+                ),
+                (
+                    "jason",
+                    "Jason Duval",
+                    "Partner",
+                    "Keys",
+                    "#4cc9f0",
+                    "Reconnaissance & vehicle handling specialist.",
+                ),
+                (
+                    "cal",
+                    "Cal Hampton",
+                    "Informant",
+                    "Grassrivers",
+                    "#f77f00",
+                    "Tracks radio chatter and swamp sightings.",
+                ),
+                (
+                    "dre",
+                    "Dre'Quan Priest",
+                    "Record Exec",
+                    "Downtown",
+                    "#7209b7",
+                    "Only Raw Records studio & Vice City nightlife.",
+                ),
+                (
+                    "boobie",
+                    "Boobie Ike",
+                    "Broker",
+                    "Port Vice City",
+                    "#2ec4b6",
+                    "Port Vice City & real estate intel.",
+                ),
+            ];
+            for (id, name, role, district, color, bio) in defaults {
+                conn.execute(
+                    "INSERT INTO phone_contacts (id, name, role, district, avatar_color, bio)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![id, name, role, district, color, bio],
+                )?;
+            }
+            let now = now_unix_millis();
+            conn.execute(
+                "INSERT INTO phone_messages (id, contact_id, sender, text, timestamp, unread)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 1)",
+                params![
+                    "msg-init-1",
+                    "cal",
+                    "Cal Hampton",
+                    "Check the Grassrivers airboat dock — spotted a new landmark.",
+                    now
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO phone_messages (id, contact_id, sender, text, timestamp, unread)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                params![
+                    "msg-init-2",
+                    "lucia",
+                    "Lucia Caminos",
+                    "Meet at Vice Beach boardwalk when you're ready.",
+                    now - 60_000
                 ],
             )?;
         }
@@ -590,6 +702,305 @@ impl MarkerStore {
         tx.commit()?;
         Ok(entries.len())
     }
+
+    pub fn list_phone_contacts(&self) -> Result<Vec<PhoneContact>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, name, role, district, avatar_color, bio FROM phone_contacts ORDER BY rowid ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PhoneContact {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                role: row.get(2)?,
+                district: row.get(3)?,
+                avatar_color: row.get(4)?,
+                bio: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_phone_messages(&self, contact_id: Option<&str>) -> Result<Vec<PhoneMessage>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut out = Vec::new();
+        if let Some(cid) = contact_id {
+            let mut stmt = conn.prepare(
+                "SELECT id, contact_id, sender, text, timestamp, unread
+                 FROM phone_messages WHERE contact_id = ?1 ORDER BY timestamp ASC, rowid ASC",
+            )?;
+            let rows = stmt.query_map(params![cid], map_phone_message)?;
+            for row in rows {
+                out.push(row?);
+            }
+        } else {
+            let mut stmt = conn.prepare(
+                "SELECT id, contact_id, sender, text, timestamp, unread
+                 FROM phone_messages ORDER BY timestamp ASC, rowid ASC",
+            )?;
+            let rows = stmt.query_map([], map_phone_message)?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn create_phone_message(&self, input: CreatePhoneMessageInput) -> Result<PhoneMessage> {
+        let msg = PhoneMessage {
+            id: Uuid::new_v4().to_string(),
+            contact_id: input.contact_id,
+            sender: input.sender.unwrap_or_else(|| "me".to_string()),
+            text: input.text,
+            timestamp: now_unix_millis(),
+            unread: false,
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO phone_messages (id, contact_id, sender, text, timestamp, unread)
+             VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+            params![msg.id, msg.contact_id, msg.sender, msg.text, msg.timestamp],
+        )?;
+        Ok(msg)
+    }
+
+    pub fn list_phone_notes(&self) -> Result<Vec<PhoneNote>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, title, body, x, y, updated_at FROM phone_notes ORDER BY updated_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(PhoneNote {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                body: row.get(2)?,
+                x: row.get(3)?,
+                y: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_phone_note(&self, input: SavePhoneNoteInput) -> Result<PhoneNote> {
+        let now = now_unix_millis();
+        let id = input
+            .id
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let note = PhoneNote {
+            id,
+            title: input.title,
+            body: input.body,
+            x: input.x,
+            y: input.y,
+            updated_at: now,
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO phone_notes (id, title, body, x, y, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 title = excluded.title,
+                 body = excluded.body,
+                 x = excluded.x,
+                 y = excluded.y,
+                 updated_at = excluded.updated_at",
+            params![
+                note.id,
+                note.title,
+                note.body,
+                note.x,
+                note.y,
+                note.updated_at
+            ],
+        )?;
+        Ok(note)
+    }
+
+    pub fn delete_phone_note(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let affected = conn.execute("DELETE FROM phone_notes WHERE id = ?1", params![id])?;
+        Ok(affected > 0)
+    }
+
+    pub fn list_phone_photos(&self) -> Result<Vec<SnapmaticPhoto>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, title, district, x, y, filter, caption, image_data_url, created_at
+             FROM phone_photos ORDER BY created_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(SnapmaticPhoto {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                district: row.get(2)?,
+                x: row.get(3)?,
+                y: row.get(4)?,
+                filter: row.get(5)?,
+                caption: row.get(6)?,
+                image_data_url: row.get(7)?,
+                created_at: row.get(8)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn save_phone_photo(&self, input: SavePhonePhotoInput) -> Result<SnapmaticPhoto> {
+        let now = now_unix_millis();
+        let id = input
+            .id
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let photo = SnapmaticPhoto {
+            id,
+            title: input.title,
+            district: input.district.unwrap_or_else(|| "Leonida".to_string()),
+            x: input.x,
+            y: input.y,
+            filter: input.filter.unwrap_or_else(|| "none".to_string()),
+            caption: input.caption.unwrap_or_default(),
+            image_data_url: input.image_data_url.unwrap_or_default(),
+            created_at: now,
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO phone_photos (id, title, district, x, y, filter, caption, image_data_url, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                 title = excluded.title,
+                 district = excluded.district,
+                 x = excluded.x,
+                 y = excluded.y,
+                 filter = excluded.filter,
+                 caption = excluded.caption,
+                 image_data_url = excluded.image_data_url",
+            params![
+                photo.id,
+                photo.title,
+                photo.district,
+                photo.x,
+                photo.y,
+                photo.filter,
+                photo.caption,
+                photo.image_data_url,
+                photo.created_at
+            ],
+        )?;
+        Ok(photo)
+    }
+
+    pub fn delete_phone_photo(&self, id: &str) -> Result<bool> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let affected = conn.execute("DELETE FROM phone_photos WHERE id = ?1", params![id])?;
+        Ok(affected > 0)
+    }
+}
+
+fn map_phone_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<PhoneMessage> {
+    let unread_int: i64 = row.get(5)?;
+    Ok(PhoneMessage {
+        id: row.get(0)?,
+        contact_id: row.get(1)?,
+        sender: row.get(2)?,
+        text: row.get(3)?,
+        timestamp: row.get(4)?,
+        unread: unread_int != 0,
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneContact {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub district: String,
+    pub avatar_color: String,
+    pub bio: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneMessage {
+    pub id: String,
+    pub contact_id: String,
+    pub sender: String,
+    pub text: String,
+    pub timestamp: i64,
+    pub unread: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePhoneMessageInput {
+    #[serde(alias = "contact_id")]
+    pub contact_id: String,
+    pub sender: Option<String>,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhoneNote {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePhoneNoteInput {
+    pub id: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapmaticPhoto {
+    pub id: String,
+    pub title: String,
+    pub district: String,
+    pub x: f64,
+    pub y: f64,
+    pub filter: String,
+    pub caption: String,
+    pub image_data_url: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavePhonePhotoInput {
+    pub id: Option<String>,
+    pub title: String,
+    pub district: Option<String>,
+    pub x: f64,
+    pub y: f64,
+    pub filter: Option<String>,
+    pub caption: Option<String>,
+    #[serde(alias = "image_data_url")]
+    pub image_data_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -21,6 +21,11 @@ use crate::db::{
     UpdateMarkerInput, UserMarker, MARKERS_SCHEMA,
 };
 use crate::error::AppError;
+use crate::phone::{
+    create_message, delete_note_path, delete_note_query_or_body, delete_photo_path,
+    delete_photo_query_or_body, list_contacts, list_messages, list_notes, list_photos, save_note,
+    save_photo,
+};
 use crate::rage::{export_handling, inspect_header, parse_handling};
 use crate::sol::{auth_api, get_media_files, submit_challenge};
 use crate::state::AppState;
@@ -33,6 +38,7 @@ pub fn build_router(state: AppState) -> Router {
         ),
     );
     let data_service = ServeDir::new(&state.data_dir);
+    let phone_service = ServeDir::new(&state.phone_dist_dir).append_index_html_on_directories(true);
 
     let dist_service = ServeDir::new(&state.dist_dir).append_index_html_on_directories(true);
 
@@ -75,11 +81,31 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/rage/inspect-header", post(inspect_header))
         .route("/api/rage/handling/parse", post(parse_handling))
         .route("/api/rage/handling/export", post(export_handling))
+        .route("/api/phone/contacts", get(list_contacts))
+        .route(
+            "/api/phone/messages",
+            get(list_messages).post(create_message),
+        )
+        .route(
+            "/api/phone/notes",
+            get(list_notes)
+                .post(save_note)
+                .delete(delete_note_query_or_body),
+        )
+        .route("/api/phone/notes/{id}", delete(delete_note_path))
+        .route(
+            "/api/phone/photos",
+            get(list_photos)
+                .post(save_photo)
+                .delete(delete_photo_query_or_body),
+        )
+        .route("/api/phone/photos/{id}", delete(delete_photo_path))
         .route("/auth/api.php", get(auth_api).post(auth_api))
         .route("/api/sol/challenge/submit", post(submit_challenge))
         .route("/get-media-files.php", get(get_media_files))
         .nest_service("/tiles", tiles_service)
         .nest_service("/data", data_service)
+        .nest_service("/phone", phone_service)
         .fallback_service(dist_service)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

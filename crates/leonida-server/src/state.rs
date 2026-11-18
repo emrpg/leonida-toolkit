@@ -14,4 +14,5 @@ pub struct AppState {
     pub dist_dir: PathBuf,
     pub tiles_dir: PathBuf,
     pub data_dir: PathBuf,
+    pub phone_dist_dir: PathBuf,
 }
