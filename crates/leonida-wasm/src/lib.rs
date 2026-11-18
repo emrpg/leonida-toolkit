@@ -1,3 +1,5 @@
+mod sol;
+
 use leonida_core::{
     build_irl_to_ig_model, filter_landmarks, landmark_stats, nearest_landmarks,
     parse_gta6map_tuple, path_length as core_path_length, polygon_area as core_polygon_area,
@@ -251,6 +253,78 @@ impl TileResolver {
     }
 }
 
+/// Score a Screenshot Challenge guess against the target coordinate.
+#[wasm_bindgen]
+pub fn score_screenshot_challenge(
+    target_x: f64,
+    target_y: f64,
+    guess_x: f64,
+    guess_y: f64,
+) -> Result<JsValue, JsValue> {
+    let result = sol::score_screenshot_challenge(target_x, target_y, guess_x, guess_y);
+    to_js(&result)
+}
+
+/// Handle to a loaded State of Leonida dataset (`SolEntry[]`).
+#[wasm_bindgen]
+pub struct SolDataset {
+    entries: Vec<sol::SolEntry>,
+}
+
+#[wasm_bindgen]
+impl SolDataset {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn load(raw_json: &str) -> Result<SolDataset, JsValue> {
+        let entries: Vec<sol::SolEntry> =
+            serde_json::from_str(raw_json).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(Self { entries })
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn all(&self) -> Result<JsValue, JsValue> {
+        to_js(&self.entries)
+    }
+
+    pub fn filter(&self, filter: JsValue) -> Result<JsValue, JsValue> {
+        let parsed: sol::SolFilter = if filter.is_null() || filter.is_undefined() {
+            sol::SolFilter::default()
+        } else {
+            from_js(filter)?
+        };
+        let matches = sol::filter_sol_entries(&self.entries, &parsed);
+        to_js(&matches)
+    }
+
+    pub fn stats(&self) -> Result<JsValue, JsValue> {
+        let stats = sol::sol_stats(&self.entries);
+        to_js(&stats)
+    }
+
+    pub fn nearest(&self, x: f64, y: f64, n: Option<usize>) -> Result<JsValue, JsValue> {
+        let matches = sol::nearest_sol_entries(&self.entries, x, y, n.unwrap_or(5));
+        to_js(&matches)
+    }
+}
+
+impl Default for SolDataset {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,5 +370,71 @@ mod tests {
             Some("base")
         );
         assert_eq!(resolver.resolve(&src, TileCoord { z: 0, x: 2, y: 0 }), None);
+    }
+
+    #[test]
+    fn screenshot_challenge_scoring() {
+        let exact = sol::score_screenshot_challenge(100.0, 200.0, 100.0, 200.0);
+        assert_eq!(exact.score, 5000);
+        assert_eq!(exact.grade, "S");
+        assert!(exact.distance_m < 1e-9);
+
+        let mid = sol::score_screenshot_challenge(0.0, 0.0, 1200.0, 0.0);
+        assert!((mid.distance_m - 1200.0).abs() < 1e-9);
+        assert_eq!(mid.score, 1839);
+        assert_eq!(mid.grade, "C");
+
+        let far = sol::score_screenshot_challenge(0.0, 0.0, 5000.0, 0.0);
+        assert_eq!(far.grade, "D");
+    }
+
+    #[test]
+    fn sol_dataset_filter_and_stats() {
+        let entries = vec![
+            sol::SolEntry {
+                id: "b1".into(),
+                title: "Hotel".into(),
+                category: "hotel".into(),
+                dataset: "trailer1".into(),
+                x: 100.0,
+                y: 200.0,
+                z: None,
+                district: Some("Vice Beach".into()),
+                status: Some("confirmed".into()),
+                description: None,
+                timestamp_sec: Some(10),
+                media_url: None,
+                real_world: None,
+            },
+            sol::SolEntry {
+                id: "b2".into(),
+                title: "Port".into(),
+                category: "transport".into(),
+                dataset: "trailer2".into(),
+                x: 300.0,
+                y: 400.0,
+                z: None,
+                district: Some("Port Gellhorn".into()),
+                status: Some("unknown".into()),
+                description: None,
+                timestamp_sec: Some(20),
+                media_url: None,
+                real_world: None,
+            },
+        ];
+        let stats = sol::sol_stats(&entries);
+        assert_eq!(stats.total, 2);
+        assert_eq!(stats.by_category["hotel"], 1);
+        assert_eq!(stats.by_dataset["trailer2"], 1);
+
+        let filtered = sol::filter_sol_entries(
+            &entries,
+            &sol::SolFilter {
+                category: Some("hotel".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, "b1");
     }
 }

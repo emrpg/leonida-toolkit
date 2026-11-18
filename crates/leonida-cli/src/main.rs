@@ -1,3 +1,5 @@
+mod sol;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use leonida_core::{
@@ -32,6 +34,12 @@ enum Commands {
         /// Directory containing tile sets (default: <root>/apps/map/public/tiles)
         #[arg(long)]
         tiles: Option<PathBuf>,
+    },
+    /// Extract and classify raw datasets into State of Leonida JSONs under apps/map/public/data/
+    BuildSolData {
+        /// Workspace root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
     },
     /// Print landmark dataset statistics
     Stats {
@@ -488,6 +496,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::BuildData { root, tiles } => run_build_data(&root, tiles.as_deref()),
+        Commands::BuildSolData { root } => sol::run_build_sol_data(&root),
         Commands::Stats { data, json } => run_stats(data.as_deref(), json),
         Commands::Search {
             query,
@@ -625,6 +634,61 @@ mod tests {
         .unwrap();
         assert_eq!(manifest["dupzor,51"]["0"][0], "0,0");
         assert!(base.join("apps/map/public/data/datasets.json").exists());
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn build_sol_data_on_temp_dir() {
+        let base = std::env::temp_dir().join(format!(
+            "leonida-sol-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let raw = base.join("data/raw");
+        fs::create_dir_all(&raw).unwrap();
+        fs::write(
+            raw.join("gta6map-landmarks.json"),
+            r#"[
+                ["b1", "?, Vice Beach", [1340,2830], 0, "The Ritz-Carlton, FL", [25.89,-80.12], 0, ["hotel"], "166624", 1.0],
+                ["b2", "?, Port Gellhorn", [500,600], 0, "?", [], 0, ["industrial"], "888888", 2.0]
+            ]"#,
+        )
+        .unwrap();
+        fs::write(
+            raw.join("gtamaplib-vc-landmarks.json"),
+            r#"{"schema":"gtamaplib-vvc-landmarks-v1","landmarks":[{"id":"L1","name":"Tower","xyz":[10,20,30]}]}"#,
+        )
+        .unwrap();
+
+        sol::run_build_sol_data(&base).unwrap();
+
+        let out = base.join("apps/map/public/data");
+        for name in [
+            "markers.json",
+            "trailer1.json",
+            "trailer2.json",
+            "trailer3.json",
+            "leaks.json",
+            "screenshots.json",
+            "el_screenshots.json",
+            "news.json",
+            "database_changelog.json",
+            "content.json",
+            "credits.json",
+            "supporters.json",
+            "backgrounds.json",
+            "lang.json",
+            "seo.json",
+        ] {
+            assert!(out.join(name).exists(), "missing {name}");
+        }
+
+        let markers: Value =
+            serde_json::from_str(&fs::read_to_string(out.join("markers.json")).unwrap()).unwrap();
+        assert_eq!(markers.as_array().unwrap().len(), 3);
 
         let _ = fs::remove_dir_all(&base);
     }
