@@ -1,3 +1,4 @@
+mod rage;
 mod sol;
 mod v04;
 
@@ -152,6 +153,8 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    /// RAGE asset/config tools (RPF7/RPF8, RSC7, JOAAT, handling.meta)
+    Rage(rage::RageArgs),
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -585,6 +588,7 @@ fn main() -> Result<()> {
             obs,
             json,
         } => run_solve_camera(width, height, fov, &obs, json),
+        Commands::Rage(args) => rage::run_rage(args),
     }
 }
 
@@ -857,5 +861,32 @@ mod tests {
             }
             _ => panic!("expected SolveCamera"),
         }
+    }
+
+    #[test]
+    fn parse_rage_subcommands_and_helpers() {
+        let cli = Cli::try_parse_from(["leonida", "rage", "joaat", "adder", "--size", "4096"])
+            .expect("should parse rage joaat");
+        match cli.command {
+            Commands::Rage(args) => match args.command {
+                rage::RageCommands::Joaat { name, size, .. } => {
+                    assert_eq!(name, "adder");
+                    assert_eq!(size, Some(4096));
+                    assert_eq!(rage::joaat(&name), 0xB779_A091);
+                }
+                _ => panic!("expected Joaat"),
+            },
+            _ => panic!("expected Rage"),
+        }
+
+        let rpf_bytes = rage::parse_hex_bytes("5250463710000000000200004F50454E").unwrap();
+        let rpf = rage::parse_rpf_header(&rpf_bytes).unwrap();
+        assert_eq!(rpf.version, "RPF7");
+        assert_eq!(rpf.encryption, "Open");
+
+        let rsc_bytes = rage::parse_hex_bytes("525343370D0000000020000000400000").unwrap();
+        let rsc = rage::parse_rsc7_header(&rsc_bytes).unwrap();
+        assert_eq!(rsc.version, 13);
+        assert!(rsc.system_size > 0);
     }
 }

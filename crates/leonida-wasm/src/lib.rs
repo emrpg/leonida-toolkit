@@ -1,3 +1,4 @@
+mod rage;
 mod sol;
 mod v04;
 
@@ -385,6 +386,68 @@ pub fn plan_route(
     to_js(&route)
 }
 
+/// Compute 32-bit Jenkins one-at-a-time (JOAAT) hash for a RAGE asset name (case-insensitive).
+#[wasm_bindgen]
+pub fn joaat(name: &str) -> u32 {
+    rage::joaat(name)
+}
+
+/// Compute deterministic NG key table index from asset name and file size.
+#[wasm_bindgen]
+pub fn compute_ng_key_index(name: &str, file_size: u64) -> u32 {
+    rage::compute_ng_key_index(name, file_size)
+}
+
+/// Parse an RPF7/RPF8 header from a hex string.
+#[wasm_bindgen]
+pub fn parse_rpf_header(hex: &str) -> Result<JsValue, JsValue> {
+    let bytes = rage::parse_hex_bytes(hex).map_err(|e| JsValue::from_str(&e))?;
+    let hdr = rage::parse_rpf_header(&bytes).map_err(|e| JsValue::from_str(&e))?;
+    to_js(&hdr)
+}
+
+/// Parse an RPF7/RPF8 header from raw bytes.
+#[wasm_bindgen]
+pub fn parse_rpf_bytes(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let hdr = rage::parse_rpf_header(bytes).map_err(|e| JsValue::from_str(&e))?;
+    to_js(&hdr)
+}
+
+/// Parse an RSC7 header from a hex string.
+#[wasm_bindgen]
+pub fn parse_rsc7_header(hex: &str) -> Result<JsValue, JsValue> {
+    let bytes = rage::parse_hex_bytes(hex).map_err(|e| JsValue::from_str(&e))?;
+    let hdr = rage::parse_rsc7_header(&bytes).map_err(|e| JsValue::from_str(&e))?;
+    to_js(&hdr)
+}
+
+/// Parse an RSC7 header from raw bytes.
+#[wasm_bindgen]
+pub fn parse_rsc7_bytes(bytes: &[u8]) -> Result<JsValue, JsValue> {
+    let hdr = rage::parse_rsc7_header(bytes).map_err(|e| JsValue::from_str(&e))?;
+    to_js(&hdr)
+}
+
+/// Compute RSC7 segment size (bytes) from page flags.
+#[wasm_bindgen]
+pub fn compute_segment_size(flags: u32) -> u64 {
+    rage::compute_segment_size(flags)
+}
+
+/// Parse `handling.meta` XML into `HandlingItem[]`.
+#[wasm_bindgen]
+pub fn parse_handling_meta(xml: &str) -> Result<JsValue, JsValue> {
+    let items = rage::parse_handling_meta(xml).map_err(|e| JsValue::from_str(&e))?;
+    to_js(&items)
+}
+
+/// Export `HandlingItem[]` back to `handling.meta` XML.
+#[wasm_bindgen]
+pub fn export_handling_meta(items: JsValue) -> Result<String, JsValue> {
+    let parsed: Vec<rage::HandlingItem> = from_js(items)?;
+    Ok(rage::export_handling_meta(&parsed))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,5 +615,42 @@ mod tests {
         ];
         let pose = v04::solve_camera_pose(&obs, 1280.0, 720.0, Some(60.0)).unwrap();
         assert!(pose.rmse_px < 10.0);
+    }
+
+    #[test]
+    fn rage_rpf_rsc7_joaat_and_handling() {
+        assert_eq!(rage::joaat("adder"), 0xB779_A091);
+
+        let rpf_bytes = [
+            0x52, 0x50, 0x46, 0x37, // RPF7
+            0x10, 0x00, 0x00, 0x00, // entry_count = 16
+            0x00, 0x02, 0x00, 0x00, // names_length = 512
+            0x4F, 0x50, 0x45, 0x4E, // OPEN
+        ];
+        let rpf = rage::parse_rpf_header(&rpf_bytes).unwrap();
+        assert_eq!(rpf.version, "RPF7");
+        assert_eq!(rpf.entry_count, 16);
+        assert_eq!(rpf.names_length, 512);
+        assert_eq!(rpf.encryption, "Open");
+
+        let rsc_bytes = [
+            0x52, 0x53, 0x43, 0x37, // RSC7
+            0x0D, 0x00, 0x00, 0x00, // version = 13
+            0x00, 0x20, 0x00, 0x00, // system_flags
+            0x00, 0x40, 0x00, 0x00, // graphics_flags
+        ];
+        let rsc = rage::parse_rsc7_header(&rsc_bytes).unwrap();
+        assert_eq!(rsc.version, 13);
+        assert!(rsc.system_size > 0);
+        assert!(rsc.graphics_size > 0);
+
+        let xml = r#"<CHandlingDataMgr><HandlingData><Item type="CHandlingData"><handlingName>ADDER</handlingName><fMass value="1650.0" /><nInitialDriveGears value="7" /></Item></HandlingData></CHandlingDataMgr>"#;
+        let items = rage::parse_handling_meta(xml).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].handling_name, "ADDER");
+        assert_eq!(items[0].n_initial_drive_gears, 7);
+        let exported = rage::export_handling_meta(&items);
+        let roundtrip = rage::parse_handling_meta(&exported).unwrap();
+        assert_eq!(roundtrip[0].handling_name, "ADDER");
     }
 }
