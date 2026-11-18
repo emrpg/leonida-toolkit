@@ -1,0 +1,19 @@
+{
+  "name": "leonida-toolkit",
+  "private": true,
+  "version": "0.1.0",
+  "description": "GTA VI (Leonida) community tooling: interactive map, landmark tracker, photogrammetry and companion utilities.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "data:build": "node scripts/build-data.mjs",
+    "assets:link": "bash scripts/link-assets.sh",
+    "test": "npm run test -w @leonida/core",
+    "typecheck": "npm run typecheck -w @leonida/core && npm run typecheck -w @leonida/map",
+    "dev": "npm run dev -w @leonida/map -- --port 5173",
+    "build": "npm run data:build && npm run build -w @leonida/map"
+  }
+}

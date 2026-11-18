@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Leonida 互动地图 · GTA VI 社区工具</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header>
+          <h1>Leonida 互动地图</h1>
+          <p class="sub">GTA VI 社区地标 · 摄影测量工具</p>
+        </header>
+        <nav id="tabs">
+          <button data-tab="landmarks" class="active">地标</button>
+          <button data-tab="tools">工具</button>
+          <button data-tab="mine">我的标记</button>
+          <button data-tab="about">关于</button>
+        </nav>
+
+        <section id="tab-landmarks" class="tab active">
+          <input id="search" type="search" placeholder="搜索 ID / 游戏地址 / 现实地址 / 标签…" />
+          <div id="status-filters" class="chips"></div>
+          <div id="tag-filters" class="chips"></div>
+          <div id="result-count" class="muted"></div>
+          <ul id="landmark-list"></ul>
+        </section>
+
+        <section id="tab-tools" class="tab">
+          <h3>测距 / 面积</h3>
+          <div class="row">
+            <button id="tool-measure">开始测距</button>
+            <button id="tool-area">开始测面积</button>
+            <button id="tool-clear-measure">清除</button>
+          </div>
+          <div id="measure-out" class="out"></div>
+
+          <h3>方位线三角定位</h3>
+          <p class="muted">每条射线：先点击观察点，再点击视线方向上的任一点。≥2 条射线后自动求最小二乘交点。</p>
+          <div class="row">
+            <button id="tool-ray">添加射线</button>
+            <button id="tool-clear-rays">清除射线</button>
+          </div>
+          <div id="ray-out" class="out"></div>
+
+          <h3>现实坐标 → 游戏坐标预测</h3>
+          <p class="muted">基于已确认地标的局部加权仿射拟合（迈阿密等真实位置 → Leonida）。</p>
+          <div class="row">
+            <input id="irl-input" placeholder="纬度, 经度  例: 25.7907, -80.1300" />
+            <button id="irl-predict">预测</button>
+          </div>
+          <div id="irl-out" class="out"></div>
+
+          <h3>导出</h3>
+          <div class="row">
+            <button id="export-geojson">导出当前筛选 GeoJSON</button>
+          </div>
+        </section>
+
+        <section id="tab-mine" class="tab">
+          <p class="muted">在地图上 <b>右键</b>（移动端长按）添加个人标记，数据保存在本机浏览器。</p>
+          <div class="row">
+            <button id="mine-export">导出 JSON</button>
+            <label class="btn">导入 JSON<input id="mine-import" type="file" accept="application/json" hidden /></label>
+            <button id="mine-clear">全部清除</button>
+          </div>
+          <ul id="mine-list"></ul>
+        </section>
+
+        <section id="tab-about" class="tab">
+          <div id="about"></div>
+        </section>
+      </aside>
+      <main id="map"></main>
+      <div id="coords" class="muted"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
