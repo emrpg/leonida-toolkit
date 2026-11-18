@@ -1,4 +1,5 @@
 import type {
+  AdminDbOverview,
   CameraObs,
   CameraPose,
   ChangelogItem,
@@ -11,6 +12,7 @@ import type {
   HeaderInspectResult,
   Landmark,
   LeaderboardEntry,
+  MarkerComment,
   MediaTabInfo,
   NewsItem,
   NotificationItem,
@@ -22,6 +24,7 @@ import type {
   TileManifest,
   UserMarker,
   UserMarkersExport,
+  WikiCacheEntry,
 } from './types';
 
 const MINE_KEY = 'leonida.userMarkers.v1';
@@ -749,5 +752,119 @@ export async function exportHandlingRemote(items: readonly HandlingItem[]): Prom
     return typeof res?.xml === 'string' ? res.xml : null;
   } catch {
     return null;
+  }
+}
+
+// ---------- v0.8 Discussion, Wiki Cache & Admin Studio ----------
+export async function fetchMarkerComments(markerId: string): Promise<MarkerComment[]> {
+  try {
+    const raw = await fetchJson<unknown>(
+      `/auth/api.php?action=marker_discussion_list&marker_id=${encodeURIComponent(markerId)}`,
+    );
+    const arr = unwrapArray<MarkerComment>(raw, ['comments', 'items', 'data']);
+    if (Array.isArray(raw) || (raw && typeof raw === 'object' && 'comments' in raw)) {
+      return arr;
+    }
+  } catch {
+    // offline fallback
+  }
+  try {
+    const raw = localStorage.getItem(`sol.discussion.${markerId}`);
+    return raw ? (JSON.parse(raw) as MarkerComment[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function postMarkerComment(
+  markerId: string,
+  author: string,
+  body: string,
+): Promise<MarkerComment[]> {
+  const item: MarkerComment = {
+    id: crypto.randomUUID(),
+    marker_id: markerId,
+    author: author || 'Anonymous',
+    body,
+    created_at: new Date().toISOString(),
+  };
+  try {
+    await fetchJson<unknown>('/auth/api.php?action=marker_discussion_post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ marker_id: markerId, author: item.author, body }),
+    });
+    return fetchMarkerComments(markerId);
+  } catch {
+    const cur = await fetchMarkerComments(markerId);
+    const next = [item, ...cur];
+    try {
+      localStorage.setItem(`sol.discussion.${markerId}`, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+    return next;
+  }
+}
+
+export async function fetchWikiCache(): Promise<Record<string, WikiCacheEntry>> {
+  try {
+    const raw = await fetchJson<Record<string, WikiCacheEntry> | WikiCacheEntry[]>(
+      '/data/wiki-cache.json',
+    );
+    if (Array.isArray(raw)) {
+      const map: Record<string, WikiCacheEntry> = {};
+      for (const w of raw) {
+        if (w.id) map[w.id] = w;
+        map[w.title.toLowerCase()] = w;
+      }
+      return map;
+    }
+    return raw ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export async function fetchAdminOverview(): Promise<AdminDbOverview> {
+  try {
+    const raw = await fetchJson<AdminDbOverview & { overview?: AdminDbOverview }>(
+      '/auth/api.php?action=admin_db_overview',
+    );
+    return raw.overview ?? raw;
+  } catch {
+    return { integrity: 'offline (localStorage)' };
+  }
+}
+
+export async function checkAdminIntegrity(): Promise<string> {
+  try {
+    const raw = await fetchJson<{ status?: string; integrity?: string; ok?: boolean }>(
+      '/auth/api.php?action=admin_db_integrity',
+    );
+    return raw.integrity ?? raw.status ?? (raw.ok ? 'OK' : 'Unknown');
+  } catch {
+    return '离线模式：仅检查本地 localStorage';
+  }
+}
+
+export async function exportAdminDb(): Promise<unknown> {
+  try {
+    return await fetchJson<unknown>('/auth/api.php?action=admin_db_export');
+  } catch {
+    return { exportedAt: new Date().toISOString(), mode: 'offline' };
+  }
+}
+
+export async function publishAdminNews(title: string, summary: string): Promise<boolean> {
+  try {
+    await fetchJson<unknown>('/auth/api.php?action=admin_news_save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, summary, date: new Date().toISOString().slice(0, 10) }),
+    });
+    return true;
+  } catch {
+    return false;
   }
 }

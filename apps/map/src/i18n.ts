@@ -185,3 +185,35 @@ export function saveLang(lang: Lang): void {
 export function tr(lang: Lang, key: I18nKey): string {
   return DICT[lang][key];
 }
+
+const DISTRICT_ZH: Record<string, string> = {
+  Leonida: '雷奥奈达州',
+  'Vice City': '罪恶城',
+  'Vice Beach': '罪恶海滩',
+  'Vice-Dale County': '罪恶戴尔县',
+  'Port Gellhorn': '盖尔霍恩港',
+  Ambrosia: '安布罗西亚',
+  'Ambrosia County': '安布罗西亚县',
+  Grassrivers: '草河',
+  'Leonida Keys': '雷奥奈达群岛',
+  'Mount Kalaga': '卡拉加山',
+  'Mount Kalaga National Park': '卡拉加山国家公园',
+  'Kelly County': '凯利县',
+  'Leonard County': '伦纳德县',
+  Hamlet: '哈姆雷特',
+  'Watson Bay': '沃森湾',
+  'Waning Sands': '残沙湾',
+  'Tequesta Key': '特奎斯塔礁',
+  'Key Lento': '伦托礁',
+  'Key Catalan': '卡塔兰礁',
+  'Port Vice City': '罪恶城港',
+  'Vice City International Airport': '罪恶城国际机场',
+  Rockridge: '洛克里奇',
+  Stockyard: '斯托克亚德',
+};
+
+export function translateDistrict(district: string | null | undefined, lang: Lang): string {
+  if (!district) return '';
+  if (lang === 'en') return district;
+  return DISTRICT_ZH[district] ?? district;
+}

@@ -8,6 +8,16 @@
     <title>State of Leonida · Map Studio</title>
   </head>
   <body class="bg-effects">
+    <!-- Preloader -->
+    <div id="preloader" class="preloader hidden">
+      <div class="preloader-card glass-card">
+        <div class="preloader-ring"></div>
+        <div class="brand-title" style="font-size:20px">State of Leonida</div>
+        <div class="muted">Map Studio v0.8 · 正在初始化 WASM 引擎与地标数据库…</div>
+        <button id="preloader-skip" class="ghost" style="margin-top:10px">跳过开屏</button>
+      </div>
+    </div>
+
     <div id="studio">
       <!-- Top Studio Navbar -->
       <header id="topbar">
@@ -34,6 +44,7 @@
           <button data-module="media" data-i18n="navMedia">媒体库</button>
           <button data-module="news" data-i18n="navNews">新闻与日志</button>
           <button data-module="community" data-i18n="navCommunity">排行榜与通知</button>
+          <button data-module="admin">管理台 Admin</button>
         </nav>
 
         <div class="top-actions">
@@ -66,6 +77,12 @@
             <section id="tab-layers" class="tab">
               <h3 data-i18n="datasetsTitle">多数据集图层开关</h3>
               <div id="dataset-toggles" class="dataset-list"></div>
+              <h3>高级地图叠加层</h3>
+              <div class="dataset-list">
+                <label class="ds-row"><span>Canvas 热力图 (Heatmap)</span><input type="checkbox" id="layer-heatmap" /></label>
+                <label class="ds-row"><span>1000m 坐标网格 (Grid)</span><input type="checkbox" id="layer-grid" /></label>
+                <label class="ds-row"><span>标记聚合 (Clustering)</span><input type="checkbox" id="layer-cluster" /></label>
+              </div>
             </section>
 
             <section id="tab-tools" class="tab">
@@ -105,6 +122,14 @@
                 <button id="tool-clear-route" data-i18n="routeClear">清除路线</button>
               </div>
               <div id="route-out" class="out"></div>
+
+              <h3>Marker Motion 路径动画</h3>
+              <div class="row">
+                <button id="tool-motion-rec">录制路径点</button>
+                <button id="tool-motion-play" class="primary">播放</button>
+                <button id="tool-motion-clear">清除</button>
+              </div>
+              <div id="motion-out" class="out"></div>
             </section>
 
             <section id="tab-mine" class="tab">
@@ -319,6 +344,33 @@
             </div>
           </div>
         </section>
+
+        <!-- Admin Studio View -->
+        <section id="view-admin" class="module-view page-view">
+          <div class="page-inner two-col">
+            <div class="stack">
+              <h2>Admin Studio · 数据库管理台</h2>
+              <div id="admin-overview" class="stats-bar"></div>
+              <div class="row">
+                <button id="admin-integrity-btn">数据库完整性检查</button>
+                <button id="admin-export-btn" class="primary">全库 JSON 导出</button>
+              </div>
+              <div id="admin-integrity-out" class="out"></div>
+
+              <div class="glass-card stack" style="margin-top:8px">
+                <h3>在线发布新闻</h3>
+                <input id="admin-news-title" placeholder="新闻标题" />
+                <textarea id="admin-news-summary" rows="3" placeholder="新闻摘要内容…"></textarea>
+                <button id="admin-news-publish" class="primary">发布新闻</button>
+                <div id="admin-news-out" class="muted"></div>
+              </div>
+            </div>
+            <div class="stack">
+              <h2>致谢与支持者 (Credits & Supporters)</h2>
+              <div id="admin-credits-box" class="glass-card"></div>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -335,6 +387,10 @@
             <span data-i18n="bgEffectsLabel">开启霓虹玻璃背景光效 (bgEffects)</span>
           </label>
           <label class="toggle-row">
+            <input type="checkbox" id="set-preloader" />
+            <span>启用开屏动画 (isPreloaderStyle)</span>
+          </label>
+          <label class="toggle-row">
             <input type="checkbox" id="set-show-labels" />
             <span data-i18n="showLabelsLabel">显示地标悬停提示 (showLabels)</span>
           </label>
@@ -346,6 +402,32 @@
             <input type="checkbox" id="set-auto-fly" />
             <span data-i18n="autoFlyLabel">点击结果自动飞往坐标 (autoFly)</span>
           </label>
+
+          <div class="color-grid">
+            <label>主题强调色 (accentColor)
+              <select id="set-accent">
+                <option value="pink">Neon Pink</option>
+                <option value="cyan">Vice Cyan</option>
+                <option value="gold">Sunset Gold</option>
+                <option value="emerald">Emerald</option>
+              </select>
+            </label>
+            <label>面板材质 (panelStyle)
+              <select id="set-panel-style">
+                <option value="glass">Glass</option>
+                <option value="solid">Solid</option>
+                <option value="minimal">Minimal</option>
+              </select>
+            </label>
+            <label>列表密度 (listDensity)
+              <select id="set-density">
+                <option value="compact">Compact</option>
+                <option value="comfortable">Comfortable</option>
+                <option value="cozy">Cozy</option>
+              </select>
+            </label>
+            <label>背景底色 <input type="color" id="set-bg-color" /></label>
+          </div>
 
           <div class="color-row">
             <span data-i18n="markerColorLabel">个人标记自定义颜色 (markerCustomColor)</span>

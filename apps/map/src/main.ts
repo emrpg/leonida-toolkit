@@ -2,6 +2,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import './style.css';
 import type {
+  AccentPreset,
   CameraObs,
   CameraPose,
   ChallengeScoreResult,
@@ -10,6 +11,8 @@ import type {
   IrlStatus,
   Landmark,
   Landmark3D,
+  ListDensity,
+  PanelStyle,
   PhotogrammetryProject,
   Ray2D,
   SolEntry,
@@ -27,9 +30,12 @@ import {
 } from './types';
 import {
   MarkerClient,
+  checkAdminIntegrity,
   computeCompanionStats,
   deletePhotogrammetryProject,
+  exportAdminDb,
   exportHandlingRemote,
+  fetchAdminOverview,
   fetchChangelog,
   fetchCompanionChecklist,
   fetchCredits,
@@ -37,6 +43,7 @@ import {
   fetchLandmarks3D,
   fetchLandmarksData,
   fetchLeaderboard,
+  fetchMarkerComments,
   fetchMediaFiles,
   fetchMediaTabs,
   fetchNews,
@@ -45,18 +52,21 @@ import {
   fetchRouteRemote,
   fetchSolDataset,
   fetchTileManifest,
+  fetchWikiCache,
   importCompanionChecklist,
   inspectRageHeaderRemote,
   listPhotogrammetryProjects,
   markNotificationsRead,
   parseHandlingRemote,
+  postMarkerComment,
+  publishAdminNews,
   savePhotogrammetryProject,
   solveCameraPoseRemote,
   submitChallengeScore,
   toggleCompanionItem,
 } from './api';
-import { loadLang, saveLang, tr, type I18nKey, type Lang } from './i18n';
-import { DEFAULT_SETTINGS, loadStudioSettings, saveStudioSettings } from './settings';
+import { loadLang, saveLang, tr, translateDistrict, type I18nKey, type Lang } from './i18n';
+import { ACCENT_HEX, DEFAULT_SETTINGS, loadStudioSettings, saveStudioSettings } from './settings';
 import { Leonida3DView } from './view3d';
 import { initLeonidaWasm, type WasmTileResolverHandle } from './wasm-bridge';
 
@@ -152,13 +162,26 @@ async function main() {
     $('#lang-toggle').textContent = tr(lang, 'langBtn');
   };
 
-  const applyBgEffects = () => {
+  const applyTheme = () => {
     document.body.classList.toggle('bg-effects', settings.bgEffects);
+    document.documentElement.style.setProperty('--accent', ACCENT_HEX[settings.accentColor] ?? '#ff4fa3');
+    document.documentElement.style.setProperty('--bg', settings.selectedBackgroundColor || '#0c0e16');
+    document.body.dataset.panelStyle = settings.panelStyle;
+    document.body.dataset.density = settings.listDensity;
   };
 
   applyI18n();
-  applyBgEffects();
+  applyTheme();
   startCountdown(() => lang);
+
+  // Preloader
+  const preloader = $('#preloader');
+  if (settings.isPreloaderStyle) {
+    preloader.classList.remove('hidden');
+    const hidePre = () => preloader.classList.add('hidden');
+    $('#preloader-skip').onclick = hidePre;
+    setTimeout(hidePre, 900);
+  }
 
   // Load WASM + core data + SOL datasets in parallel
   const [
@@ -173,6 +196,7 @@ async function main() {
     solLeaks,
     solShots,
     solElShots,
+    wikiCache,
   ] = await Promise.all([
     initLeonidaWasm(),
     fetchLandmarksData(),
@@ -185,6 +209,7 @@ async function main() {
     fetchSolDataset('leaks'),
     fetchSolDataset('screenshots'),
     fetchSolDataset('el_screenshots'),
+    fetchWikiCache(),
   ]);
 
   const landmarkStore =
@@ -231,11 +256,49 @@ async function main() {
   if (firstBase) firstBase.addTo(map);
 
   const landmarkLayer = L.layerGroup().addTo(map);
+  const clusterLayer = L.layerGroup().addTo(map);
+  const gridLayer = L.layerGroup();
   const layer3d = L.layerGroup();
   if (settings.mapSettings.show3dByDefault) layer3d.addTo(map);
   const mineLayer = L.layerGroup().addTo(map);
   const toolLayer = L.layerGroup().addTo(map);
   const challengeLayer = L.layerGroup().addTo(map);
+
+  // Build 1000m World Grid
+  for (let v = -16000; v <= 16000; v += 1000) {
+    const major = v % 4000 === 0;
+    const style = { color: major ? '#00e5ff' : '#ffffff', weight: major ? 1 : 0.5, opacity: major ? 0.28 : 0.1 };
+    L.polyline([toLatLng({ x: v, y: -16384 }), toLatLng({ x: v, y: 16384 })], style).addTo(gridLayer);
+    L.polyline([toLatLng({ x: -16384, y: v }), toLatLng({ x: 16384, y: v })], style).addTo(gridLayer);
+  }
+  if (settings.mapSettings.gridEnabled) gridLayer.addTo(map);
+
+  // Heatmap Canvas Overlay
+  const heatmapCanvas = document.createElement('canvas');
+  heatmapCanvas.className = 'heatmap-canvas';
+  map.getContainer().appendChild(heatmapCanvas);
+  function drawHeatmap() {
+    const size = map.getSize();
+    heatmapCanvas.width = size.x;
+    heatmapCanvas.height = size.y;
+    const ctx = heatmapCanvas.getContext('2d')!;
+    ctx.clearRect(0, 0, size.x, size.y);
+    if (!settings.mapSettings.heatmapEnabled) return;
+    const cells = wasm.computeHeatmapCells(current, 800);
+    const radius = Math.max(18, 22 * Math.pow(2, Math.min(3, map.getZoom() - 1)));
+    for (const c of cells) {
+      const pt = map.latLngToContainerPoint(toLatLng({ x: c.x, y: c.y }));
+      if (pt.x < -radius || pt.y < -radius || pt.x > size.x + radius || pt.y > size.y + radius) continue;
+      const g = ctx.createRadialGradient(pt.x, pt.y, 0, pt.x, pt.y, radius);
+      g.addColorStop(0, `rgba(255, 79, 163, ${0.25 + 0.55 * c.weight})`);
+      g.addColorStop(0.5, `rgba(255, 179, 71, ${0.15 + 0.35 * c.weight})`);
+      g.addColorStop(1, 'rgba(0, 229, 255, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
   const solLayers: Record<keyof typeof datasetEntries, L.LayerGroup> = {
     trailer1: L.layerGroup(),
@@ -273,6 +336,8 @@ async function main() {
   map.on('moveend', () => {
     const c = toWorld(map.getCenter());
     history.replaceState(null, '', `#${c.x.toFixed(0)},${c.y.toFixed(0)},${map.getZoom()}`);
+    drawHeatmap();
+    if (settings.mapSettings.clusteringEnabled) renderClusters();
   });
   map.on('mousemove', (e: L.LeafletMouseEvent) => {
     $('#coords').textContent = `X ${e.latlng.lng.toFixed(0)}  Y ${e.latlng.lat.toFixed(0)}  (m) · zoom ${map.getZoom()}`;
@@ -283,7 +348,8 @@ async function main() {
   const popupHtml = (l: Landmark) => {
     const near = l.ig ? landmarkStore.nearest(l.ig, 4).slice(1) : [];
     const gmaps = l.irl ? `https://www.google.com/maps?q=${l.irl.lat},${l.irl.lon}` : null;
-    return `<div class="pop">
+    const wiki = wikiCache[l.id] ?? wikiCache[l.name.toLowerCase()];
+    return `<div class="pop" data-lm-id="${esc(l.id)}">
       <div class="pop-id" style="border-color:#${l.color}">${esc(l.id)} · ${esc(STATUS_LABEL[l.irlStatus])}</div>
       <div class="pop-name">${esc(l.name)}</div>
       <div><b>游戏地址</b> ${esc(l.igAddress)}</div>
@@ -292,9 +358,37 @@ async function main() {
       ${gmaps ? `<div><a href="${gmaps}" target="_blank" rel="noopener">在 Google 地图中查看现实位置 ↗</a></div>` : ''}
       <div><b>标签</b> ${l.tags.map(esc).join(', ') || '—'}</div>
       ${near.length ? `<div class="muted">附近: ${near.map((n) => `${esc(n.landmark.id)} (${formatDistance(n.distance)})`).join(', ')}</div>` : ''}
-      <div class="muted">更新: ${new Date(l.editedAt * 1000).toLocaleDateString()}</div>
+      ${wiki ? `<div class="pop-wiki"><b>Wiki:</b> ${esc(wiki.summary)}</div>` : ''}
+      <div class="pop-disc">
+        <div class="pop-disc-list" id="disc-list-${esc(l.id)}">加载讨论中…</div>
+        <div class="row"><input id="disc-in-${esc(l.id)}" placeholder="发表评论…" style="padding:3px 6px;font-size:11px" /><button id="disc-btn-${esc(l.id)}" class="mini" style="position:static">发送</button></div>
+      </div>
     </div>`;
   };
+  map.on('popupopen', (ev) => {
+    const el = ev.popup.getElement()?.querySelector<HTMLElement>('.pop[data-lm-id]');
+    const lmId = el?.dataset.lmId;
+    if (!lmId) return;
+    const renderComments = (list: Awaited<ReturnType<typeof fetchMarkerComments>>) => {
+      const box = document.getElementById(`disc-list-${lmId}`);
+      if (!box) return;
+      box.innerHTML = list.length
+        ? list.map((c) => `<div><b>${esc(c.author)}:</b> ${esc(c.body)}</div>`).join('')
+        : '<span class="muted">暂无讨论，来发第一条评论！</span>';
+    };
+    void fetchMarkerComments(lmId).then(renderComments);
+    const btn = document.getElementById(`disc-btn-${lmId}`);
+    if (btn) {
+      btn.onclick = async () => {
+        const inp = document.getElementById(`disc-in-${lmId}`) as HTMLInputElement | null;
+        const body = inp?.value.trim();
+        if (!body) return;
+        inp!.value = '';
+        const updated = await postMarkerComment(lmId, 'Explorer', body);
+        renderComments(updated);
+      };
+    }
+  });
   for (const l of landmarks) {
     if (!l.ig) continue;
     const m = L.circleMarker(toLatLng(l.ig), {
@@ -464,19 +558,56 @@ async function main() {
   });
 
   let current: Landmark[] = landmarks;
+  function renderClusters() {
+    clusterLayer.clearLayers();
+    if (!settings.mapSettings.clusteringEnabled) return;
+    const cell = 4000 / Math.pow(2, Math.max(0, map.getZoom()));
+    const buckets = new Map<string, Landmark[]>();
+    for (const l of current) {
+      if (!l.ig) continue;
+      const key = `${Math.floor(l.ig.x / cell)},${Math.floor(l.ig.y / cell)}`;
+      const arr = buckets.get(key) ?? [];
+      arr.push(l);
+      buckets.set(key, arr);
+    }
+    const color = settings.clusterCustomColors.landmarks;
+    for (const grp of buckets.values()) {
+      if (grp.length === 1) {
+        markerById.get(grp[0]!.id)?.addTo(clusterLayer);
+        continue;
+      }
+      const cx = grp.reduce((s, l) => s + l.ig!.x, 0) / grp.length;
+      const cy = grp.reduce((s, l) => s + l.ig!.y, 0) / grp.length;
+      const icon = L.divIcon({
+        className: '',
+        html: `<div class="cluster-badge" style="width:30px;height:30px;background:${color}">${grp.length}</div>`,
+        iconSize: [30, 30],
+      });
+      L.marker(toLatLng({ x: cx, y: cy }), { icon })
+        .on('click', () => map.flyTo(toLatLng({ x: cx, y: cy }), map.getZoom() + 1.5))
+        .addTo(clusterLayer);
+    }
+  }
+
   function refresh() {
     current = [...landmarkStore.filter({ text: state.text, tags: [...state.tags], statuses: [...state.statuses] })].sort(
       (a, b) => idSortKey(a.id).localeCompare(idSortKey(b.id)),
     );
     landmarkLayer.clearLayers();
-    for (const l of current) markerById.get(l.id)?.addTo(landmarkLayer);
+    clusterLayer.clearLayers();
+    if (settings.mapSettings.clusteringEnabled) {
+      renderClusters();
+    } else {
+      for (const l of current) markerById.get(l.id)?.addTo(landmarkLayer);
+    }
+    drawHeatmap();
     $('#result-count').textContent = `显示 ${current.length} / ${stats.total} 个地标（已定位 ${current.filter((l) => l.ig).length}）`;
     const list = $('#landmark-list');
     list.innerHTML = '';
     for (const l of current.slice(0, 400)) {
       const li = document.createElement('li');
       li.style.borderLeftColor = `#${l.color}`;
-      li.innerHTML = `<div class="li-top"><span class="li-id">${esc(l.id)}</span> ${esc(l.name)}</div><div class="muted">${esc(l.district ?? '')} · ${esc(l.irlAddress)}</div>`;
+      li.innerHTML = `<div class="li-top"><span class="li-id">${esc(l.id)}</span> ${esc(l.name)}</div><div class="muted">${esc(translateDistrict(l.district, lang))} · ${esc(l.irlAddress)}</div>`;
       if (!l.ig) li.classList.add('unpositioned');
       li.onclick = () => focusLandmark(l);
       list.appendChild(li);
@@ -510,6 +641,30 @@ async function main() {
     };
   });
 
+  // Layer toggles (Heatmap / Grid / Clustering)
+  const cbHeat = $<HTMLInputElement>('#layer-heatmap');
+  const cbGrid = $<HTMLInputElement>('#layer-grid');
+  const cbClus = $<HTMLInputElement>('#layer-cluster');
+  cbHeat.checked = settings.mapSettings.heatmapEnabled;
+  cbGrid.checked = settings.mapSettings.gridEnabled;
+  cbClus.checked = settings.mapSettings.clusteringEnabled;
+  cbHeat.onchange = () => {
+    settings.mapSettings.heatmapEnabled = cbHeat.checked;
+    saveStudioSettings(settings);
+    drawHeatmap();
+  };
+  cbGrid.onchange = () => {
+    settings.mapSettings.gridEnabled = cbGrid.checked;
+    saveStudioSettings(settings);
+    if (cbGrid.checked) gridLayer.addTo(map);
+    else map.removeLayer(gridLayer);
+  };
+  cbClus.onchange = () => {
+    settings.mapSettings.clusteringEnabled = cbClus.checked;
+    saveStudioSettings(settings);
+    refresh();
+  };
+
   // ---------- Tools: click-mode state machine ----------
   type Mode =
     | 'none'
@@ -519,6 +674,7 @@ async function main() {
     | 'ray-target'
     | 'route-start'
     | 'route-end'
+    | 'motion-rec'
     | 'challenge';
   let mode: Mode = 'none';
   let measurePts: WorldPoint[] = [];
@@ -653,7 +809,7 @@ async function main() {
     .map((e) => ({
       id: e.id,
       title: e.title,
-      subtitle: `${e.dataset}${e.district ? ` · ${e.district}` : ''}`,
+      subtitle: `${e.dataset}${e.district ? ` · ${translateDistrict(e.district, lang)}` : ''}`,
       x: e.x,
       y: e.y,
       mediaUrl: e.mediaUrl,
@@ -715,11 +871,68 @@ async function main() {
     await refreshMiniLeaderboard();
   };
 
+  // ---------- Marker Motion ----------
+  const motionLayer = L.layerGroup().addTo(toolLayer);
+  let motionPts: WorldPoint[] = [];
+  let motionRaf = 0;
+  function drawMotionPath() {
+    motionLayer.clearLayers();
+    if (!motionPts.length) return;
+    L.polyline(motionPts.map(toLatLng), { color: '#ff4fa3', dashArray: '6 4', weight: 3 }).addTo(motionLayer);
+    motionPts.forEach((pt) => L.circleMarker(toLatLng(pt), { radius: 4, color: '#fff', fillColor: '#ff4fa3', fillOpacity: 1 }).addTo(motionLayer));
+  }
+  $('#tool-motion-rec').onclick = () => {
+    cancelAnimationFrame(motionRaf);
+    motionPts = [];
+    drawMotionPath();
+    setMode('motion-rec');
+    $('#motion-out').textContent = '点击地图录制路径点（按 ESC 结束录制）…';
+  };
+  $('#tool-motion-clear').onclick = () => {
+    cancelAnimationFrame(motionRaf);
+    motionPts = [];
+    drawMotionPath();
+    setMode('none');
+    $('#motion-out').textContent = '';
+  };
+  $('#tool-motion-play').onclick = () => {
+    if (motionPts.length < 2) {
+      $('#motion-out').textContent = '请先录制至少 2 个路径点';
+      return;
+    }
+    setMode('none');
+    cancelAnimationFrame(motionRaf);
+    drawMotionPath();
+    const actor = L.circleMarker(toLatLng(motionPts[0]!), {
+      radius: 9,
+      color: '#fff',
+      weight: 2,
+      fillColor: '#00e5ff',
+      fillOpacity: 1,
+    }).addTo(motionLayer);
+    const startTs = performance.now();
+    const duration = Math.max(2500, motionPts.length * 1200);
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startTs) / duration);
+      const sample = wasm.interpolateMotionPath(motionPts, t);
+      if (sample) {
+        actor.setLatLng(toLatLng(sample));
+        $('#motion-out').textContent = `进度 ${(t * 100).toFixed(0)}% · 坐标 ${formatWorld(sample)} · 航向 ${sample.bearing.toFixed(0)}°`;
+      }
+      if (t < 1) motionRaf = requestAnimationFrame(step);
+    };
+    motionRaf = requestAnimationFrame(step);
+  };
+
   map.on('click', (e: L.LeafletMouseEvent) => {
     const p = toWorld(e.latlng);
     if (mode === 'measure' || mode === 'area') {
       measurePts.push(p);
       drawMeasure();
+    } else if (mode === 'motion-rec') {
+      motionPts.push(p);
+      drawMotionPath();
+      $('#motion-out').textContent = `已录制 ${motionPts.length} 个路径点（点击“播放”或按 ESC 结束）`;
     } else if (mode === 'ray-origin') {
       rayOrigin = p;
       setMode('ray-target');
@@ -909,7 +1122,7 @@ async function main() {
       card.innerHTML = `
         ${item.mediaUrl ? `<img src="${esc(item.mediaUrl)}" alt="${esc(item.title)}" loading="lazy" />` : ''}
         <div class="li-top"><b>${esc(item.title)}</b></div>
-        <div class="muted">${esc(item.dataset)} · ${esc(item.district ?? item.category ?? '')}</div>
+        <div class="muted">${esc(item.dataset)} · ${esc(item.district ? translateDistrict(item.district, lang) : item.category ?? '')}</div>
         ${item.description ? `<p class="muted">${esc(item.description)}</p>` : ''}
         ${hasCoords ? `<div class="row"><button class="jump-btn">${esc(tr(lang, 'jumpToMap'))} (${item.x.toFixed(0)}, ${item.y.toFixed(0)})</button></div>` : ''}`;
       const jb = card.querySelector('.jump-btn') as HTMLButtonElement | null;
@@ -1294,7 +1507,7 @@ async function main() {
           <input type="checkbox" ${item.completed ? 'checked' : ''} />
           <b>${esc(item.title)}</b>
         </label>
-        <div class="muted">${esc(item.category)}${item.district ? ` · ${esc(item.district)}` : ''} · (${item.x.toFixed(0)}, ${item.y.toFixed(0)})</div>
+        <div class="muted">${esc(item.category)}${item.district ? ` · ${esc(translateDistrict(item.district, lang))}` : ''} · (${item.x.toFixed(0)}, ${item.y.toFixed(0)})</div>
         <div class="row"><button class="jump-btn">定位到地图</button></div>`;
       const cb = card.querySelector('input')!;
       cb.onchange = async () => {
@@ -1456,6 +1669,34 @@ async function main() {
   $('#rage-joaat-in').addEventListener('input', runJoaat);
   runJoaat();
 
+  // ---------- Admin Studio ----------
+  async function loadAdminView() {
+    const [ov, cred] = await Promise.all([fetchAdminOverview(), fetchCredits()]);
+    $('#admin-overview').innerHTML = `
+      <div class="stat-box">地标: <b>${ov.landmarks ?? stats.total}</b></div>
+      <div class="stat-box">个人标记: <b>${ov.markers ?? mine.length}</b></div>
+      <div class="stat-box">标定工程: <b>${ov.projects ?? 0}</b></div>
+      <div class="stat-box">评论: <b>${ov.comments ?? 0}</b></div>`;
+    $('#admin-credits-box').innerHTML = `
+      <div><b>Credits:</b> ${cred.credits.map(esc).join(', ') || 'State of Leonida, gta6map, gtamaplib-vc'}</div>
+      <div class="muted" style="margin-top:8px"><b>Supporters:</b> ${cred.supporters.map(esc).join(', ') || 'Community Contributors'}</div>`;
+  }
+  $('#admin-integrity-btn').onclick = async () => {
+    $('#admin-integrity-out').textContent = `完整性检查结果: ${await checkAdminIntegrity()}`;
+  };
+  $('#admin-export-btn').onclick = async () => {
+    download('leonida-admin-db-export.json', await exportAdminDb());
+  };
+  $('#admin-news-publish').onclick = async () => {
+    const title = $<HTMLInputElement>('#admin-news-title').value.trim();
+    const summary = $<HTMLTextAreaElement>('#admin-news-summary').value.trim();
+    if (!title) return;
+    const ok = await publishAdminNews(title, summary);
+    $('#admin-news-out').textContent = ok ? '新闻已发布至服务端 SQLite' : '离线模式：未能连接服务端';
+    $<HTMLInputElement>('#admin-news-title').value = '';
+    $<HTMLTextAreaElement>('#admin-news-summary').value = '';
+  };
+
   // ---------- Topbar Module Switching ----------
   type ModuleName =
     | 'map'
@@ -1466,7 +1707,8 @@ async function main() {
     | 'challenge'
     | 'media'
     | 'news'
-    | 'community';
+    | 'community'
+    | 'admin';
   function switchModule(mod: ModuleName) {
     document.querySelectorAll('#studio-nav button').forEach((b) => {
       b.classList.toggle('active', (b as HTMLElement).dataset.module === mod);
@@ -1506,6 +1748,9 @@ async function main() {
     } else if (mod === 'community') {
       $('#view-community').classList.add('active');
       loadCommunityView();
+    } else if (mod === 'admin') {
+      $('#view-admin').classList.add('active');
+      void loadAdminView();
     }
   }
 
@@ -1525,9 +1770,14 @@ async function main() {
   const modal = $('#settings-modal');
   const syncModalInputs = () => {
     $<HTMLInputElement>('#set-bg-effects').checked = settings.bgEffects;
+    $<HTMLInputElement>('#set-preloader').checked = settings.isPreloaderStyle;
     $<HTMLInputElement>('#set-show-labels').checked = settings.mapSettings.showLabels;
     $<HTMLInputElement>('#set-show-3d').checked = settings.mapSettings.show3dByDefault;
     $<HTMLInputElement>('#set-auto-fly').checked = settings.mapSettings.autoFly;
+    $<HTMLSelectElement>('#set-accent').value = settings.accentColor;
+    $<HTMLSelectElement>('#set-panel-style').value = settings.panelStyle;
+    $<HTMLSelectElement>('#set-density').value = settings.listDensity;
+    $<HTMLInputElement>('#set-bg-color').value = settings.selectedBackgroundColor;
     $<HTMLInputElement>('#set-marker-color').value = settings.markerCustomColor;
     $<HTMLInputElement>('#col-landmarks').value = settings.clusterCustomColors.landmarks;
     $<HTMLInputElement>('#col-trailer1').value = settings.clusterCustomColors.trailer1;
@@ -1547,9 +1797,16 @@ async function main() {
   };
   $('#settings-save').onclick = () => {
     settings = {
+      ...settings,
       bgEffects: $<HTMLInputElement>('#set-bg-effects').checked,
+      isPreloaderStyle: $<HTMLInputElement>('#set-preloader').checked,
+      accentColor: $<HTMLSelectElement>('#set-accent').value as AccentPreset,
+      panelStyle: $<HTMLSelectElement>('#set-panel-style').value as PanelStyle,
+      listDensity: $<HTMLSelectElement>('#set-density').value as ListDensity,
+      selectedBackgroundColor: $<HTMLInputElement>('#set-bg-color').value,
       markerCustomColor: $<HTMLInputElement>('#set-marker-color').value,
       mapSettings: {
+        ...settings.mapSettings,
         showGrid: true,
         showLabels: $<HTMLInputElement>('#set-show-labels').checked,
         show3dByDefault: $<HTMLInputElement>('#set-show-3d').checked,
@@ -1565,7 +1822,7 @@ async function main() {
       },
     };
     saveStudioSettings(settings);
-    applyBgEffects();
+    applyTheme();
     renderSolLayers();
     renderDatasetToggles();
     drawMine();

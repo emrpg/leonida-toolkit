@@ -207,6 +207,35 @@ textarea {
   font-family: ui-monospace, monospace; font-size: 12px; resize: vertical;
 }
 
+/* v0.8 Preloader, Theme Engine, Heatmap & Discussion */
+.preloader {
+  position: fixed; inset: 0; z-index: 4000;
+  background: rgba(8, 10, 18, 0.92); backdrop-filter: blur(16px);
+  display: flex; align-items: center; justify-content: center;
+}
+.preloader-card { text-align: center; padding: 28px 36px; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.preloader-ring {
+  width: 44px; height: 44px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.15); border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+body[data-panel-style='solid'] { --panel: #141724; --glass: #1a1e2e; }
+body[data-panel-style='minimal'] { --panel: rgba(12, 14, 22, 0.6); --glass: rgba(18, 20, 30, 0.45); }
+body[data-density='compact'] #landmark-list li, body[data-density='compact'] #mine-list li { padding: 3px 6px; font-size: 12px; }
+body[data-density='cozy'] #landmark-list li, body[data-density='cozy'] #mine-list li { padding: 10px 12px; }
+
+.heatmap-canvas { position: absolute; inset: 0; pointer-events: none; z-index: 350; }
+.cluster-badge {
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; color: #111; font-weight: 700; font-size: 12px;
+  border: 2px solid #fff; box-shadow: 0 2px 10px rgba(0,0,0,.5);
+}
+.pop-wiki { margin-top: 6px; padding: 6px 8px; background: rgba(0,229,255,.08); border-left: 3px solid var(--cyan); border-radius: 4px; font-size: 11px; }
+.pop-disc { margin-top: 8px; border-top: 1px solid rgba(255,255,255,.15); padding-top: 6px; }
+.pop-disc-list { max-height: 90px; overflow-y: auto; font-size: 11px; margin-bottom: 4px; }
+
 /* Settings Modal */
 .modal {
   position: fixed; inset: 0; background: rgba(0, 0, 0, .65); backdrop-filter: blur(4px);

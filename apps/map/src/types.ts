@@ -238,7 +238,15 @@ export interface MapSettings {
   showLabels: boolean;
   show3dByDefault: boolean;
   autoFly: boolean;
+  heatmapEnabled: boolean;
+  gridEnabled: boolean;
+  clusteringEnabled: boolean;
+  markerMotionEnabled: boolean;
 }
+
+export type AccentPreset = 'pink' | 'cyan' | 'gold' | 'emerald';
+export type PanelStyle = 'glass' | 'solid' | 'minimal';
+export type ListDensity = 'compact' | 'comfortable' | 'cozy';
 
 export interface ClusterCustomColors {
   landmarks: string;
@@ -254,6 +262,50 @@ export interface StudioSettings {
   clusterCustomColors: ClusterCustomColors;
   markerCustomColor: string;
   bgEffects: boolean;
+  isPreloaderStyle: boolean;
+  accentColor: AccentPreset;
+  panelStyle: PanelStyle;
+  listDensity: ListDensity;
+  selectedBackgroundColor: string;
+}
+
+// ---------- v0.8 Types: Heatmap, Motion, Discussion, Wiki, Admin ----------
+export interface HeatmapCell {
+  x: number;
+  y: number;
+  count: number;
+  weight: number;
+}
+
+export interface MotionSample {
+  x: number;
+  y: number;
+  bearing: number;
+}
+
+export interface MarkerComment {
+  id: string;
+  marker_id: string;
+  author: string;
+  body: string;
+  created_at: string;
+}
+
+export interface WikiCacheEntry {
+  id?: string;
+  title: string;
+  summary: string;
+  url?: string;
+}
+
+export interface AdminDbOverview {
+  landmarks?: number;
+  markers?: number;
+  comments?: number;
+  projects?: number;
+  collectibles?: number;
+  news?: number;
+  integrity?: string;
 }
 
 // ---------- v0.4 Types: Photogrammetry & Route Planning ----------

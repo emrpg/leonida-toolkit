@@ -7,11 +7,13 @@ import type {
   GtamaplibVcFile,
   HandlingItem,
   HeaderInspectResult,
+  HeatmapCell,
   Landmark,
   Landmark3D,
   LandmarkFilter,
   LandmarkStats,
   LatLon,
+  MotionSample,
   NearestLandmark,
   Prediction,
   Ray2D,
@@ -85,6 +87,8 @@ export interface LeonidaWasmEngine {
   inspectRageHeader(hex: string): HeaderInspectResult;
   parseHandlingXml(xml: string): HandlingItem[];
   exportHandlingXml(items: readonly HandlingItem[]): string;
+  computeHeatmapCells(landmarks: readonly Landmark[], cellSize?: number): HeatmapCell[];
+  interpolateMotionPath(points: readonly WorldPoint[], t: number): MotionSample | null;
 }
 
 function wrapLandmarksHandle(inner: InstanceType<typeof WasmLandmarks>): WasmLandmarksHandle {
@@ -435,6 +439,63 @@ function fallbackExportHandlingXml(items: readonly HandlingItem[]): string {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<CHandlingDataMgr>\n  <HandlingData>\n${body}\n  </HandlingData>\n</CHandlingDataMgr>`;
 }
 
+function fallbackComputeHeatmapCells(
+  landmarks: readonly Landmark[],
+  cellSize = 800,
+): HeatmapCell[] {
+  const buckets = new Map<string, { sx: number; sy: number; count: number }>();
+  for (const l of landmarks) {
+    if (!l.ig) continue;
+    const gx = Math.floor(l.ig.x / cellSize);
+    const gy = Math.floor(l.ig.y / cellSize);
+    const key = `${gx},${gy}`;
+    const b = buckets.get(key) ?? { sx: 0, sy: 0, count: 0 };
+    b.sx += l.ig.x;
+    b.sy += l.ig.y;
+    b.count += 1;
+    buckets.set(key, b);
+  }
+  let maxCount = 1;
+  for (const b of buckets.values()) if (b.count > maxCount) maxCount = b.count;
+  return [...buckets.values()].map((b) => ({
+    x: b.sx / b.count,
+    y: b.sy / b.count,
+    count: b.count,
+    weight: b.count / maxCount,
+  }));
+}
+
+function fallbackInterpolateMotionPath(
+  points: readonly WorldPoint[],
+  t: number,
+): MotionSample | null {
+  if (!points.length) return null;
+  if (points.length === 1) return { x: points[0]!.x, y: points[0]!.y, bearing: 0 };
+  const clamped = Math.max(0, Math.min(1, t));
+  const segLens: number[] = [];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const d = Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+    segLens.push(d);
+    total += d;
+  }
+  if (total < 1e-6) return { x: points[0]!.x, y: points[0]!.y, bearing: 0 };
+  let target = clamped * total;
+  for (let i = 0; i < segLens.length; i++) {
+    const len = segLens[i]!;
+    if (target <= len || i === segLens.length - 1) {
+      const u = len > 0 ? target / len : 0;
+      const a = points[i]!;
+      const b = points[i + 1]!;
+      const bearing = ((Math.atan2(b.x - a.x, b.y - a.y) * 180) / Math.PI + 360) % 360;
+      return { x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u, bearing };
+    }
+    target -= len;
+  }
+  const last = points[points.length - 1]!;
+  return { x: last.x, y: last.y, bearing: 0 };
+}
+
 let initPromise: Promise<LeonidaWasmEngine> | null = null;
 
 export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
@@ -545,6 +606,28 @@ export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
             }
           }
           return fallbackExportHandlingXml(items);
+        },
+        computeHeatmapCells: (landmarks, cellSize = 800) => {
+          const fn = (wasmModule as unknown as {
+            compute_heatmap_cells?: (pts: unknown, c: number) => HeatmapCell[];
+          }).compute_heatmap_cells;
+          if (typeof fn === 'function') {
+            try {
+              const pts = landmarks.filter((l) => l.ig).map((l) => l.ig!);
+              return fn(pts, cellSize);
+            } catch {
+              return fallbackComputeHeatmapCells(landmarks, cellSize);
+            }
+          }
+          return fallbackComputeHeatmapCells(landmarks, cellSize);
+        },
+        interpolateMotionPath: (points, t) => {
+          const fn = (wasmModule as unknown as {
+            interpolate_motion_path?: (p: unknown, t: number) => MotionSample | null;
+          }).interpolate_motion_path;
+          return typeof fn === 'function'
+            ? fn(points, t)
+            : fallbackInterpolateMotionPath(points, t);
         },
       };
     });
