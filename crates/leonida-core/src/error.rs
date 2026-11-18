@@ -9,6 +9,12 @@ pub enum CoreError {
     #[error("cannot build IRL-to-IG model from empty anchors")]
     NoAnchors,
 
+    #[error("invalid RAGE header: {0}")]
+    InvalidHeader(String),
+
+    #[error("invalid handling.meta XML: {0}")]
+    InvalidHandlingMeta(String),
+
     #[error("JSON parse error: {0}")]
     Json(#[from] serde_json::Error),
 }

@@ -4,15 +4,19 @@
 
 #![forbid(unsafe_code)]
 
+pub mod companion;
 pub mod coords;
 pub mod error;
 pub mod geo;
 pub mod landmarks;
 pub mod photogrammetry;
+pub mod rage;
 pub mod routing;
 pub mod search;
 pub mod sol;
 pub mod tiles;
+
+pub use companion::{companion_stats, filter_collectibles, CollectibleItem, CompanionStats};
 
 pub use coords::{
     bearing, bearing_to_vector, distance, distance3, format_distance, format_world, path_length,
@@ -32,6 +36,11 @@ pub use landmarks::{
 };
 pub use photogrammetry::{
     frustum_polygon, project_world_to_pixel, solve_camera_pose, CameraObs, CameraPose,
+};
+pub use rage::{
+    compute_ng_key_index, compute_segment_size, export_handling_meta, joaat, parse_handling_meta,
+    parse_rage_header, parse_rpf_header, parse_rsc7_header, HandlingItem, RageHeader,
+    RpfEncryption, RpfHeader, RpfVersion, Rsc7Header, RPF7_MAGIC, RPF8_MAGIC, RSC7_MAGIC,
 };
 pub use routing::{plan_route, plan_route_from_landmarks, RouteResult};
 pub use search::{
