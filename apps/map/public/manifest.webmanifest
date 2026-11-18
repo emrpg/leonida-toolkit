@@ -1,0 +1,10 @@
+{
+  "name": "State of Leonida · Map Studio",
+  "short_name": "Leonida",
+  "description": "GTA VI 社区互动地图、摄影测量、3D 视界与伴侣清单 PWA",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0c0e16",
+  "theme_color": "#ff4fa3",
+  "icons": []
+}

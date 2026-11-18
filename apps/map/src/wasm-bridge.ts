@@ -5,6 +5,8 @@ import type {
   ChallengeScoreResult,
   Gta6MapTuple,
   GtamaplibVcFile,
+  HandlingItem,
+  HeaderInspectResult,
   Landmark,
   Landmark3D,
   LandmarkFilter,
@@ -79,6 +81,10 @@ export interface LeonidaWasmEngine {
     x2: number,
     y2: number,
   ): RouteResult;
+  joaat(name: string): number;
+  inspectRageHeader(hex: string): HeaderInspectResult;
+  parseHandlingXml(xml: string): HandlingItem[];
+  exportHandlingXml(items: readonly HandlingItem[]): string;
 }
 
 function wrapLandmarksHandle(inner: InstanceType<typeof WasmLandmarks>): WasmLandmarksHandle {
@@ -308,6 +314,127 @@ function fallbackPlanRoute(
   };
 }
 
+function fallbackJoaat(name: string): number {
+  let hash = 0;
+  const s = name.toLowerCase();
+  for (let i = 0; i < s.length; i++) {
+    hash = (hash + s.charCodeAt(i)) >>> 0;
+    hash = (hash + ((hash << 10) >>> 0)) >>> 0;
+    hash = (hash ^ (hash >>> 6)) >>> 0;
+  }
+  hash = (hash + ((hash << 3) >>> 0)) >>> 0;
+  hash = (hash ^ (hash >>> 11)) >>> 0;
+  hash = (hash + ((hash << 15) >>> 0)) >>> 0;
+  return hash >>> 0;
+}
+
+function fallbackInspectRageHeader(hex: string): HeaderInspectResult {
+  const clean = hex.replace(/[^0-9a-fA-F]/g, '');
+  if (clean.length < 32) {
+    return { kind: 'Invalid', details: '至少需要 16 字节（32 个十六进制字符）' };
+  }
+  const bytes = new Uint8Array(Math.floor(clean.length / 2));
+  for (let i = 0; i < bytes.length; i++) {
+    bytes[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  }
+  const dv = new DataView(bytes.buffer);
+  const magicLE = dv.getUint32(0, true);
+  const magicHex = `0x${magicLE.toString(16).toUpperCase().padStart(8, '0')}`;
+  if (magicLE === 0x52504637 || magicLE === 0x52504638) {
+    const entryCount = dv.getUint32(4, true);
+    const namesLength = dv.getUint32(8, true);
+    const encRaw = dv.getUint32(12, true);
+    const encryption =
+      encRaw === 0
+        ? 'None'
+        : encRaw === 0x4e45504f
+          ? 'Open'
+          : encRaw === 0x0ffffff9
+            ? 'Aes'
+            : 'Ng';
+    return {
+      kind: magicLE === 0x52504637 ? 'RPF7' : 'RPF8',
+      magic: magicHex,
+      entryCount,
+      namesLength,
+      encryption,
+    };
+  }
+  if (magicLE === 0x37435352) {
+    const version = dv.getUint32(4, true);
+    const systemFlags = dv.getUint32(8, true);
+    const graphicsFlags = dv.getUint32(12, true);
+    const segSize = (flags: number) => {
+      const base = 0x2000 << (flags & 0xf);
+      const count =
+        (((flags >> 4) & 0x7f) +
+          (((flags >> 11) & 0x3f) << 1) +
+          (((flags >> 17) & 0xf) << 2) +
+          (((flags >> 21) & 0x3) << 3)) ||
+        1;
+      return base * count;
+    };
+    return {
+      kind: `RSC7 (v${version})`,
+      magic: magicHex,
+      systemFlags,
+      graphicsFlags,
+      systemSize: segSize(systemFlags),
+      graphicsSize: segSize(graphicsFlags),
+    };
+  }
+  return { kind: 'Unknown', magic: magicHex, details: '未识别的 RPF7/RPF8/RSC7 魔数' };
+}
+
+function fallbackParseHandlingXml(xml: string): HandlingItem[] {
+  const items: HandlingItem[] = [];
+  const itemRe = /<Item\b[^>]*>([\s\S]*?)<\/Item>/gi;
+  let m: RegExpExecArray | null;
+  const numTag = (block: string, tag: string, def: number) => {
+    const r = new RegExp(`<${tag}[^>]*value="([^"]+)"`, 'i').exec(block);
+    const v = r ? Number(r[1]) : NaN;
+    return Number.isFinite(v) ? v : def;
+  };
+  while ((m = itemRe.exec(xml)) !== null) {
+    const block = m[1]!;
+    const nameMatch = /<handlingName>\s*([^<]+?)\s*<\/handlingName>/i.exec(block);
+    if (!nameMatch) continue;
+    items.push({
+      handlingName: nameMatch[1]!.trim(),
+      fMass: numTag(block, 'fMass', 1500),
+      fInitialDragCoeff: numTag(block, 'fInitialDragCoeff', 8),
+      fDriveBiasFront: numTag(block, 'fDriveBiasFront', 0),
+      nInitialDriveGears: numTag(block, 'nInitialDriveGears', 6),
+      fInitialDriveForce: numTag(block, 'fInitialDriveForce', 0.32),
+      fDriveMaxFlatVel: numTag(block, 'fDriveMaxFlatVel', 160),
+      fBrakeForce: numTag(block, 'fBrakeForce', 0.9),
+      fTractionCurveMax: numTag(block, 'fTractionCurveMax', 2.4),
+      fSuspensionForce: numTag(block, 'fSuspensionForce', 2.2),
+    });
+  }
+  return items;
+}
+
+function fallbackExportHandlingXml(items: readonly HandlingItem[]): string {
+  const body = items
+    .map(
+      (i) => `    <Item type="CHandlingData">
+      <handlingName>${i.handlingName}</handlingName>
+      <fMass value="${i.fMass}" />
+      <fInitialDragCoeff value="${i.fInitialDragCoeff}" />
+      <fDriveBiasFront value="${i.fDriveBiasFront}" />
+      <nInitialDriveGears value="${i.nInitialDriveGears}" />
+      <fInitialDriveForce value="${i.fInitialDriveForce}" />
+      <fDriveMaxFlatVel value="${i.fDriveMaxFlatVel}" />
+      <fBrakeForce value="${i.fBrakeForce}" />
+      <fTractionCurveMax value="${i.fTractionCurveMax}" />
+      <fSuspensionForce value="${i.fSuspensionForce}" />
+    </Item>`,
+    )
+    .join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<CHandlingDataMgr>\n  <HandlingData>\n${body}\n  </HandlingData>\n</CHandlingDataMgr>`;
+}
+
 let initPromise: Promise<LeonidaWasmEngine> | null = null;
 
 export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
@@ -368,6 +495,56 @@ export function initLeonidaWasm(): Promise<LeonidaWasmEngine> {
           return typeof fn === 'function'
             ? fn(x1, y1, x2, y2)
             : fallbackPlanRoute(landmarks, x1, y1, x2, y2);
+        },
+        joaat: (name) => {
+          const fn = (wasmModule as unknown as { joaat?: (n: string) => number }).joaat;
+          return typeof fn === 'function' ? fn(name) >>> 0 : fallbackJoaat(name);
+        },
+        inspectRageHeader: (hex) => {
+          const mod = wasmModule as unknown as {
+            parse_rpf_header?: (h: string) => Record<string, unknown>;
+            parse_rsc7_header?: (h: string) => Record<string, unknown>;
+          };
+          const clean = hex.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+          try {
+            if (clean.startsWith('52534337') && typeof mod.parse_rsc7_header === 'function') {
+              const rsc = mod.parse_rsc7_header(clean);
+              return { kind: 'RSC7', ...rsc } as unknown as HeaderInspectResult;
+            }
+            if ((clean.startsWith('52504637') || clean.startsWith('52504638')) && typeof mod.parse_rpf_header === 'function') {
+              const rpf = mod.parse_rpf_header(clean);
+              return { kind: clean.startsWith('52504638') ? 'RPF8' : 'RPF7', ...rpf } as unknown as HeaderInspectResult;
+            }
+          } catch {
+            // Fall through to local fallback on invalid/partial input
+          }
+          return fallbackInspectRageHeader(hex);
+        },
+        parseHandlingXml: (xml) => {
+          const fn = (wasmModule as unknown as {
+            parse_handling_meta?: (x: string) => HandlingItem[];
+          }).parse_handling_meta;
+          if (typeof fn === 'function') {
+            try {
+              return fn(xml);
+            } catch {
+              return fallbackParseHandlingXml(xml);
+            }
+          }
+          return fallbackParseHandlingXml(xml);
+        },
+        exportHandlingXml: (items) => {
+          const fn = (wasmModule as unknown as {
+            export_handling_meta?: (i: readonly HandlingItem[]) => string;
+          }).export_handling_meta;
+          if (typeof fn === 'function') {
+            try {
+              return fn(items);
+            } catch {
+              return fallbackExportHandlingXml(items);
+            }
+          }
+          return fallbackExportHandlingXml(items);
         },
       };
     });

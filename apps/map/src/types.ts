@@ -295,6 +295,49 @@ export interface RouteResult {
   fly_min: number;
 }
 
+// ---------- v0.5 Types: Companion PWA & RAGE Tools ----------
+export interface CollectibleItem {
+  id: string;
+  title: string;
+  category: string;
+  district?: string;
+  x: number;
+  y: number;
+  completed: boolean;
+}
+
+export interface CompanionStats {
+  total: number;
+  completed: number;
+  percent: number;
+}
+
+export interface HandlingItem {
+  handlingName: string;
+  fMass: number;
+  fInitialDragCoeff: number;
+  fDriveBiasFront: number;
+  nInitialDriveGears: number;
+  fInitialDriveForce: number;
+  fDriveMaxFlatVel: number;
+  fBrakeForce: number;
+  fTractionCurveMax: number;
+  fSuspensionForce: number;
+}
+
+export interface HeaderInspectResult {
+  kind: string;
+  magic?: string;
+  entryCount?: number;
+  namesLength?: number;
+  encryption?: string;
+  systemFlags?: number;
+  graphicsFlags?: number;
+  systemSize?: number;
+  graphicsSize?: number;
+  details?: string;
+}
+
 export function formatDistance(m: number): string {
   if (m >= 1000) return `${(m / 1000).toFixed(2)} km`;
   return `${m.toFixed(0)} m`;

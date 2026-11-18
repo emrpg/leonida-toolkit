@@ -3,6 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#ff4fa3" />
+    <link rel="manifest" href="./manifest.webmanifest" />
     <title>State of Leonida · Map Studio</title>
   </head>
   <body class="bg-effects">
@@ -26,6 +28,8 @@
           <button data-module="map" class="active" data-i18n="navMap">互动地图</button>
           <button data-module="view3d" data-i18n="nav3d">3D 视界</button>
           <button data-module="photo" data-i18n="navPhoto">摄影测量</button>
+          <button data-module="companion" data-i18n="navCompanion">伴侣清单</button>
+          <button data-module="rage" data-i18n="navRage">RAGE 工具台</button>
           <button data-module="challenge" data-i18n="navChallenge">猜图挑战</button>
           <button data-module="media" data-i18n="navMedia">媒体库</button>
           <button data-module="news" data-i18n="navNews">新闻与日志</button>
@@ -191,6 +195,78 @@
                     <button id="photo-save">保存工程</button>
                   </div>
                   <ul id="photo-projects-list" class="obs-list"></ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Companion Checklist View -->
+        <section id="view-companion" class="module-view page-view">
+          <div class="page-inner">
+            <div class="page-head">
+              <div>
+                <h2>伴侣清单 · Companion Checklist (PWA)</h2>
+                <p class="muted">SQLite + localStorage 双写持久化，支持离线打卡与一键定位到地图。</p>
+              </div>
+              <div class="row">
+                <button id="comp-export">导出进度 JSON</button>
+                <label class="btn">导入进度 JSON<input id="comp-import" type="file" accept="application/json" hidden /></label>
+              </div>
+            </div>
+            <div class="glass-card" style="margin-bottom:14px">
+              <div class="row" style="justify-content:space-between">
+                <span id="comp-progress-text">已完成 0 / 0 (0%)</span>
+              </div>
+              <div class="progress-track"><div id="comp-progress-bar" class="progress-fill"></div></div>
+              <div id="comp-cats" class="chips" style="margin-top:10px"></div>
+            </div>
+            <div id="comp-list" class="card-grid"></div>
+          </div>
+        </section>
+
+        <!-- RAGE Tools View -->
+        <section id="view-rage" class="module-view page-view">
+          <div class="page-inner">
+            <div class="compliance-banner">
+              <b>合规边界声明：</b>本工具台仅解析用户自备开放配置与头部结构（<code>handling.meta</code>、RPF7/RPF8/RSC7 头部、JOAAT 32-bit 哈希），<b>不内置任何 Rockstar 密钥、不绕过 DRM 或加密保护</b>。
+            </div>
+            <div class="two-col" style="margin-top:16px">
+              <div class="glass-card">
+                <h3>handling.meta 可视化编辑器</h3>
+                <div class="row">
+                  <select id="rage-sample-select">
+                    <option value="BANSHEE">示例: BANSHEE (跑车)</option>
+                    <option value="CHEETAH">示例: CHEETAH (超跑)</option>
+                    <option value="ELEGY2">示例: ELEGY2 (街车)</option>
+                  </select>
+                  <button id="rage-load-sample">载入示例</button>
+                  <button id="rage-parse-xml">解析 XML</button>
+                  <button id="rage-export-xml" class="primary">导出 XML</button>
+                </div>
+                <div id="rage-handling-form" class="handling-grid"></div>
+                <textarea id="rage-handling-xml" rows="8" placeholder="在此粘贴或生成 handling.meta XML…"></textarea>
+              </div>
+
+              <div class="stack">
+                <div class="glass-card">
+                  <h3>RPF7 / RPF8 &amp; RSC7 头部解码器</h3>
+                  <div class="row">
+                    <button id="rage-sample-rpf7">RPF7 示例</button>
+                    <button id="rage-sample-rsc7">RSC7 示例</button>
+                    <button id="rage-inspect-btn" class="primary">解码头部</button>
+                  </div>
+                  <textarea id="rage-header-hex" rows="3" placeholder="输入至少 16 字节十六进制（如 37 46 50 52 ...）"></textarea>
+                  <div id="rage-header-out" class="out" style="margin-top:8px"></div>
+                </div>
+
+                <div class="glass-card">
+                  <h3>JOAAT 哈希计算器（Jenkins One-At-A-Time）</h3>
+                  <div class="row">
+                    <input id="rage-joaat-in" placeholder="输入模型/资产名，如 banshee / adder" value="banshee" />
+                    <button id="rage-joaat-btn" class="primary">计算</button>
+                  </div>
+                  <div id="rage-joaat-out" class="out" style="margin-top:8px"></div>
                 </div>
               </div>
             </div>

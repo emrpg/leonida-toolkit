@@ -5,6 +5,8 @@ import type {
   CameraObs,
   CameraPose,
   ChallengeScoreResult,
+  CollectibleItem,
+  HandlingItem,
   IrlStatus,
   Landmark,
   Landmark3D,
@@ -25,8 +27,11 @@ import {
 } from './types';
 import {
   MarkerClient,
+  computeCompanionStats,
   deletePhotogrammetryProject,
+  exportHandlingRemote,
   fetchChangelog,
+  fetchCompanionChecklist,
   fetchCredits,
   fetchGameStats,
   fetchLandmarks3D,
@@ -40,11 +45,15 @@ import {
   fetchRouteRemote,
   fetchSolDataset,
   fetchTileManifest,
+  importCompanionChecklist,
+  inspectRageHeaderRemote,
   listPhotogrammetryProjects,
   markNotificationsRead,
+  parseHandlingRemote,
   savePhotogrammetryProject,
   solveCameraPoseRemote,
   submitChallengeScore,
+  toggleCompanionItem,
 } from './api';
 import { loadLang, saveLang, tr, type I18nKey, type Lang } from './i18n';
 import { DEFAULT_SETTINGS, loadStudioSettings, saveStudioSettings } from './settings';
@@ -1240,8 +1249,224 @@ async function main() {
   drawPhotoCanvas();
   renderPhotoObsList();
 
+  // ---------- Companion Checklist (PWA + SQLite + localStorage) ----------
+  let companionItems: CollectibleItem[] = [];
+  let companionCat = 'ALL';
+
+  async function loadCompanionView() {
+    if (!companionItems.length) {
+      companionItems = await fetchCompanionChecklist();
+    }
+    renderCompanionView();
+  }
+
+  function renderCompanionView() {
+    const st = computeCompanionStats(companionItems);
+    $('#comp-progress-text').textContent = `已完成 ${st.completed} / ${st.total} (${st.percent}%)`;
+    $('#comp-progress-bar').style.width = `${st.percent}%`;
+
+    const cats = ['ALL', ...new Set(companionItems.map((i) => i.category))];
+    const catsEl = $('#comp-cats');
+    catsEl.innerHTML = '';
+    for (const c of cats) {
+      const b = document.createElement('button');
+      b.className = `chip ${c === companionCat ? 'on' : ''}`;
+      b.textContent = c === 'ALL' ? '全部' : c;
+      b.onclick = () => {
+        companionCat = c;
+        renderCompanionView();
+      };
+      catsEl.appendChild(b);
+    }
+
+    const listEl = $('#comp-list');
+    listEl.innerHTML = '';
+    const filtered =
+      companionCat === 'ALL'
+        ? companionItems
+        : companionItems.filter((i) => i.category === companionCat);
+
+    for (const item of filtered) {
+      const card = document.createElement('div');
+      card.className = `glass-card comp-card ${item.completed ? 'done' : ''}`;
+      card.innerHTML = `
+        <label class="toggle-row">
+          <input type="checkbox" ${item.completed ? 'checked' : ''} />
+          <b>${esc(item.title)}</b>
+        </label>
+        <div class="muted">${esc(item.category)}${item.district ? ` · ${esc(item.district)}` : ''} · (${item.x.toFixed(0)}, ${item.y.toFixed(0)})</div>
+        <div class="row"><button class="jump-btn">定位到地图</button></div>`;
+      const cb = card.querySelector('input')!;
+      cb.onchange = async () => {
+        companionItems = await toggleCompanionItem(item.id, cb.checked, companionItems);
+        renderCompanionView();
+      };
+      (card.querySelector('.jump-btn') as HTMLButtonElement).onclick = () =>
+        jumpToCoords(item.x, item.y);
+      listEl.appendChild(card);
+    }
+  }
+
+  $('#comp-export').onclick = () =>
+    download('leonida-companion-progress.json', {
+      schema: 'leonida-companion-v1',
+      items: companionItems,
+    });
+  $<HTMLInputElement>('#comp-import').onchange = async (e) => {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (!f) return;
+    try {
+      const raw = JSON.parse(await f.text()) as { items?: CollectibleItem[] } | CollectibleItem[];
+      const items = Array.isArray(raw) ? raw : (raw.items ?? []);
+      if (!items.length) throw new Error('empty');
+      companionItems = await importCompanionChecklist(items);
+      renderCompanionView();
+    } catch {
+      alert('导入失败：无效的进度 JSON');
+    }
+  };
+
+  // ---------- RAGE Tools Workbench ----------
+  const SAMPLE_HANDLING: Record<string, HandlingItem> = {
+    BANSHEE: {
+      handlingName: 'BANSHEE',
+      fMass: 1450,
+      fInitialDragCoeff: 8.5,
+      fDriveBiasFront: 0,
+      nInitialDriveGears: 6,
+      fInitialDriveForce: 0.34,
+      fDriveMaxFlatVel: 168,
+      fBrakeForce: 0.95,
+      fTractionCurveMax: 2.55,
+      fSuspensionForce: 2.3,
+    },
+    CHEETAH: {
+      handlingName: 'CHEETAH',
+      fMass: 1320,
+      fInitialDragCoeff: 7.2,
+      fDriveBiasFront: 0.15,
+      nInitialDriveGears: 7,
+      fInitialDriveForce: 0.39,
+      fDriveMaxFlatVel: 185,
+      fBrakeForce: 1.1,
+      fTractionCurveMax: 2.8,
+      fSuspensionForce: 2.5,
+    },
+    ELEGY2: {
+      handlingName: 'ELEGY2',
+      fMass: 1520,
+      fInitialDragCoeff: 9.0,
+      fDriveBiasFront: 0.3,
+      nInitialDriveGears: 6,
+      fInitialDriveForce: 0.33,
+      fDriveMaxFlatVel: 162,
+      fBrakeForce: 1.0,
+      fTractionCurveMax: 2.65,
+      fSuspensionForce: 2.2,
+    },
+  };
+  let activeHandling: HandlingItem = { ...SAMPLE_HANDLING.BANSHEE! };
+
+  function renderHandlingForm() {
+    const form = $('#rage-handling-form');
+    form.innerHTML = '';
+    const fields: Array<[keyof HandlingItem, string, string]> = [
+      ['handlingName', 'handlingName', 'text'],
+      ['fMass', 'fMass (kg)', 'number'],
+      ['fInitialDragCoeff', 'fInitialDragCoeff', 'number'],
+      ['fDriveBiasFront', 'fDriveBiasFront (0-1)', 'number'],
+      ['nInitialDriveGears', 'nInitialDriveGears', 'number'],
+      ['fInitialDriveForce', 'fInitialDriveForce', 'number'],
+      ['fDriveMaxFlatVel', 'fDriveMaxFlatVel', 'number'],
+      ['fBrakeForce', 'fBrakeForce', 'number'],
+      ['fTractionCurveMax', 'fTractionCurveMax', 'number'],
+      ['fSuspensionForce', 'fSuspensionForce', 'number'],
+    ];
+    for (const [key, label, type] of fields) {
+      const lbl = document.createElement('label');
+      lbl.textContent = label;
+      const inp = document.createElement('input');
+      inp.type = type;
+      if (type === 'number') inp.step = 'any';
+      inp.value = String(activeHandling[key]);
+      inp.oninput = () => {
+        if (key === 'handlingName') activeHandling.handlingName = inp.value;
+        else activeHandling[key] = Number(inp.value) || 0;
+      };
+      lbl.appendChild(inp);
+      form.appendChild(lbl);
+    }
+  }
+  renderHandlingForm();
+  $<HTMLTextAreaElement>('#rage-handling-xml').value = wasm.exportHandlingXml([activeHandling]);
+
+  $('#rage-load-sample').onclick = () => {
+    const key = $<HTMLSelectElement>('#rage-sample-select').value;
+    activeHandling = { ...(SAMPLE_HANDLING[key] ?? SAMPLE_HANDLING.BANSHEE!) };
+    renderHandlingForm();
+    $<HTMLTextAreaElement>('#rage-handling-xml').value = wasm.exportHandlingXml([activeHandling]);
+  };
+  $('#rage-parse-xml').onclick = async () => {
+    const xml = $<HTMLTextAreaElement>('#rage-handling-xml').value;
+    const items = (await parseHandlingRemote(xml)) ?? wasm.parseHandlingXml(xml);
+    if (items.length) {
+      activeHandling = { ...items[0]! };
+      renderHandlingForm();
+    } else {
+      alert('未能从 XML 中解析出 <Item> 节点');
+    }
+  };
+  $('#rage-export-xml').onclick = async () => {
+    const xml =
+      (await exportHandlingRemote([activeHandling])) ?? wasm.exportHandlingXml([activeHandling]);
+    $<HTMLTextAreaElement>('#rage-handling-xml').value = xml;
+  };
+
+  // RPF7/RPF8 & RSC7 Header Inspector
+  const runHeaderInspect = async () => {
+    const hex = $<HTMLTextAreaElement>('#rage-header-hex').value;
+    const res = (await inspectRageHeaderRemote(hex)) ?? wasm.inspectRageHeader(hex);
+    $('#rage-header-out').innerHTML = `类型 <b>${esc(res.kind)}</b>${res.magic ? ` · 魔数 ${esc(res.magic)}` : ''}<br/>${
+      res.entryCount !== undefined
+        ? `条目数: ${res.entryCount} · 名称表: ${res.namesLength} B · 加密: ${esc(res.encryption ?? '-')}`
+        : res.systemFlags !== undefined
+          ? `SystemFlags: 0x${res.systemFlags.toString(16)} (${res.systemSize} B) · GraphicsFlags: 0x${(res.graphicsFlags ?? 0).toString(16)} (${res.graphicsSize} B)`
+          : esc(res.details ?? '')
+    }`;
+  };
+  $('#rage-sample-rpf7').onclick = () => {
+    $<HTMLTextAreaElement>('#rage-header-hex').value =
+      '37 46 50 52 2A 00 00 00 00 08 00 00 4F 50 45 4E';
+    void runHeaderInspect();
+  };
+  $('#rage-sample-rsc7').onclick = () => {
+    $<HTMLTextAreaElement>('#rage-header-hex').value =
+      '52 53 43 37 0D 00 00 00 12 00 00 00 21 00 00 00';
+    void runHeaderInspect();
+  };
+  $('#rage-inspect-btn').onclick = () => void runHeaderInspect();
+
+  // JOAAT Calculator
+  const runJoaat = () => {
+    const text = $<HTMLInputElement>('#rage-joaat-in').value;
+    const h = wasm.joaat(text);
+    $('#rage-joaat-out').innerHTML = `HEX: <b>0x${h.toString(16).toUpperCase().padStart(8, '0')}</b> · DEC: <b>${h}</b>`;
+  };
+  $('#rage-joaat-btn').onclick = runJoaat;
+  $('#rage-joaat-in').addEventListener('input', runJoaat);
+  runJoaat();
+
   // ---------- Topbar Module Switching ----------
-  type ModuleName = 'map' | 'view3d' | 'photo' | 'challenge' | 'media' | 'news' | 'community';
+  type ModuleName =
+    | 'map'
+    | 'view3d'
+    | 'photo'
+    | 'companion'
+    | 'rage'
+    | 'challenge'
+    | 'media'
+    | 'news'
+    | 'community';
   function switchModule(mod: ModuleName) {
     document.querySelectorAll('#studio-nav button').forEach((b) => {
       b.classList.toggle('active', (b as HTMLElement).dataset.module === mod);
@@ -1267,6 +1492,11 @@ async function main() {
     } else if (mod === 'photo') {
       $('#view-photo').classList.add('active');
       void renderPhotoProjects();
+    } else if (mod === 'companion') {
+      $('#view-companion').classList.add('active');
+      void loadCompanionView();
+    } else if (mod === 'rage') {
+      $('#view-rage').classList.add('active');
     } else if (mod === 'media') {
       $('#view-media').classList.add('active');
       if (!mediaLoaded) loadMediaView();
@@ -1359,3 +1589,9 @@ main().catch((err) => {
     `<div class="fatal">加载失败：${esc(String(err))}。请确认 leonida-wasm 已构建。</div>`,
   );
 });
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => undefined);
+  });
+}

@@ -2,9 +2,13 @@ import type {
   CameraObs,
   CameraPose,
   ChangelogItem,
+  CollectibleItem,
+  CompanionStats,
   GameStats,
   Gta6MapTuple,
   GtamaplibVcFile,
+  HandlingItem,
+  HeaderInspectResult,
   Landmark,
   LeaderboardEntry,
   MediaTabInfo,
@@ -620,6 +624,129 @@ export async function fetchRouteRemote(
       drive_min: raw.drive_min ?? raw.driveMin ?? 0,
       fly_min: raw.fly_min ?? raw.flyMin ?? 0,
     };
+  } catch {
+    return null;
+  }
+}
+
+// ---------- v0.5 Companion Checklist (SQLite + localStorage dual-write) ----------
+const LOCAL_COMPANION_KEY = 'sol.companion.checklist.v1';
+
+const DEFAULT_COLLECTIBLES: CollectibleItem[] = [
+  { id: 'col-1', title: 'Ocean Drive 霓虹明信片', category: '明信片', district: 'Vice Beach', x: 1860, y: 1190, completed: false },
+  { id: 'col-2', title: 'Venetian Causeway 隐藏包裹', category: '隐藏包裹', district: 'Vice Beach', x: 750, y: 860, completed: false },
+  { id: 'col-3', title: 'Port Vice 货运飞跃点', category: '特技飞跃', district: 'Port Vice', x: -120, y: -420, completed: false },
+  { id: 'col-4', title: 'Wynwood 涂鸦墙打卡', category: '街头涂鸦', district: 'Wynwood', x: -1450, y: 1180, completed: false },
+  { id: 'col-5', title: 'Leonida Keys 灯塔观测点', category: '观景点', district: 'Gellhorn', x: -3200, y: -4800, completed: false },
+  { id: 'col-6', title: 'Vice City International 跑道飞跃', category: '特技飞跃', district: 'VCIA', x: -3900, y: 240, completed: false },
+];
+
+function loadLocalCompanion(): CollectibleItem[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_COMPANION_KEY);
+    if (!raw) return DEFAULT_COLLECTIBLES.map((x) => ({ ...x }));
+    const arr = JSON.parse(raw) as CollectibleItem[];
+    return Array.isArray(arr) && arr.length ? arr : DEFAULT_COLLECTIBLES.map((x) => ({ ...x }));
+  } catch {
+    return DEFAULT_COLLECTIBLES.map((x) => ({ ...x }));
+  }
+}
+
+function saveLocalCompanion(items: readonly CollectibleItem[]): void {
+  try {
+    localStorage.setItem(LOCAL_COMPANION_KEY, JSON.stringify(items));
+  } catch {
+    // ignore
+  }
+}
+
+export function computeCompanionStats(items: readonly CollectibleItem[]): CompanionStats {
+  const total = items.length;
+  const completed = items.filter((i) => i.completed).length;
+  return { total, completed, percent: total ? Math.round((completed / total) * 100) : 0 };
+}
+
+export async function fetchCompanionChecklist(): Promise<CollectibleItem[]> {
+  try {
+    const raw = await fetchJson<unknown>('/api/companion/checklist');
+    const items = unwrapArray<CollectibleItem>(raw, ['items', 'checklist', 'data']);
+    if (items.length) {
+      saveLocalCompanion(items);
+      return items;
+    }
+  } catch {
+    // offline fallback
+  }
+  return loadLocalCompanion();
+}
+
+export async function toggleCompanionItem(
+  id: string,
+  completed: boolean,
+  current: readonly CollectibleItem[],
+): Promise<CollectibleItem[]> {
+  const updated = current.map((it) => (it.id === id ? { ...it, completed } : it));
+  saveLocalCompanion(updated);
+  try {
+    await fetchJson<unknown>('/api/companion/toggle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, completed }),
+    });
+  } catch {
+    // localStorage dual-write already persisted
+  }
+  return updated;
+}
+
+export async function importCompanionChecklist(items: CollectibleItem[]): Promise<CollectibleItem[]> {
+  saveLocalCompanion(items);
+  try {
+    await fetchJson<unknown>('/api/companion/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+  } catch {
+    // offline
+  }
+  return items;
+}
+
+export async function inspectRageHeaderRemote(hex: string): Promise<HeaderInspectResult | null> {
+  try {
+    return await fetchJson<HeaderInspectResult>('/api/rage/inspect-header', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hex }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function parseHandlingRemote(xml: string): Promise<HandlingItem[] | null> {
+  try {
+    const raw = await fetchJson<unknown>('/api/rage/handling/parse', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ xml }),
+    });
+    const items = unwrapArray<HandlingItem>(raw, ['items', 'data']);
+    return items.length ? items : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function exportHandlingRemote(items: readonly HandlingItem[]): Promise<string | null> {
+  try {
+    const res = await fetchJson<{ xml?: string }>('/api/rage/handling/export', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    return typeof res?.xml === 'string' ? res.xml : null;
   } catch {
     return null;
   }
