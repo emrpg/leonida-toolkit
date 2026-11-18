@@ -52,6 +52,7 @@ async fn main() -> Result<()> {
         tile_manifest: Arc::new(tile_manifest),
         dist_dir: dist_dir.clone(),
         tiles_dir: tiles_dir.clone(),
+        data_dir,
     };
 
     let app = build_router(state);

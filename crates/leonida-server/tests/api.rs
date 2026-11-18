@@ -21,7 +21,7 @@ fn sample_landmarks_json() -> &'static str {
     ]"#
 }
 
-fn test_app_with_dirs(dist_dir: PathBuf, tiles_dir: PathBuf) -> axum::Router {
+fn test_app_with_dirs(dist_dir: PathBuf, tiles_dir: PathBuf, data_dir: PathBuf) -> axum::Router {
     let engine = Arc::new(
         CoreEngine::from_gta6map_json(sample_landmarks_json()).expect("parse sample json"),
     );
@@ -36,12 +36,13 @@ fn test_app_with_dirs(dist_dir: PathBuf, tiles_dir: PathBuf) -> axum::Router {
         tile_manifest,
         dist_dir,
         tiles_dir,
+        data_dir,
     })
 }
 
 fn test_app() -> axum::Router {
     let tmp = std::env::temp_dir();
-    test_app_with_dirs(tmp.clone(), tmp)
+    test_app_with_dirs(tmp.clone(), tmp.clone(), tmp)
 }
 
 async fn body_json(res: axum::response::Response) -> Value {
@@ -392,7 +393,7 @@ async fn static_dist_and_tiles_with_cache_headers() {
     std::fs::write(dist_dir.join("index.html"), "<html>Leonida Map</html>").unwrap();
     std::fs::write(tiles_dir.join("dupzor,51/0/0,0,0.jpg"), b"fakejpg").unwrap();
 
-    let app = test_app_with_dirs(dist_dir, tiles_dir);
+    let app = test_app_with_dirs(dist_dir, tiles_dir, base.clone());
 
     let res = app
         .clone()
@@ -416,6 +417,292 @@ async fn static_dist_and_tiles_with_cache_headers() {
         res.headers().get(header::CACHE_CONTROL).unwrap(),
         "public, max-age=86400"
     );
+
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[tokio::test]
+async fn sol_auth_api_public_and_markers() {
+    let app = test_app();
+
+    for action in [
+        "access_config",
+        "gtadb_source_public",
+        "site_settings_public",
+        "ranks",
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/auth/api.php?action={action}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "action {action} failed");
+        let json = body_json(res).await;
+        assert_eq!(json["ok"], true);
+    }
+
+    // access_verify
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=access_verify")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["verified"], true);
+
+    // notifications & notifications_read
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/auth/api.php?action=notifications")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let notif = body_json(res).await;
+    assert_eq!(notif["unreadCount"], 1);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=notifications_read")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["updated"], 1);
+
+    // marker_save -> marker_list -> marker_update -> marker_delete
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=marker_save")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "name": "SOL Pin", "x": 100.0, "y": -200.0 }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let saved = body_json(res).await;
+    let marker_id = saved["marker"]["id"].as_str().unwrap().to_string();
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/auth/api.php?action=marker_list")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["markers"].as_array().unwrap().len(), 1);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=marker_update")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({ "id": marker_id, "name": "SOL Pin Updated" }).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["marker"]["name"], "SOL Pin Updated");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/auth/api.php?action=marker_delete")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(json!({ "id": marker_id }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["deleted"], true);
+
+    // Unknown action -> 400
+    let res = app
+        .oneshot(
+            Request::get("/auth/api.php?action=does_not_exist")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn sol_challenge_submit_and_leaderboard() {
+    let app = test_app();
+
+    // Exact hit -> 5000, grade S
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/sol/challenge/submit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "player": "Lucia",
+                        "entryId": "t1-01",
+                        "targetX": 1000.0,
+                        "targetY": 2000.0,
+                        "guessX": 1000.0,
+                        "guessY": 2000.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let sub1 = body_json(res).await;
+    assert_eq!(sub1["result"]["score"], 5000);
+    assert_eq!(sub1["result"]["grade"], "S");
+
+    // Farther guess -> lower score
+    let res = app
+        .clone()
+        .oneshot(
+            Request::post("/api/sol/challenge/submit")
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    json!({
+                        "player": "Jason",
+                        "entryId": "t1-01",
+                        "targetX": 1000.0,
+                        "targetY": 2000.0,
+                        "guessX": 4000.0,
+                        "guessY": 2000.0
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/auth/api.php?action=leaderboard&game=screenshot_challenge&limit=10")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let lb = body_json(res).await;
+    let entries = lb["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["player"], "Lucia");
+    assert_eq!(entries[0]["score"], 5000);
+
+    let res = app
+        .oneshot(
+            Request::get("/auth/api.php?action=game_stats&game=screenshot_challenge")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let gs = body_json(res).await;
+    assert_eq!(gs["totalPlays"], 2);
+    assert_eq!(gs["bestScore"], 5000);
+}
+
+#[tokio::test]
+async fn sol_media_files_and_static_data() {
+    let base = std::env::temp_dir().join(format!("leonida-sol-test-{}", uuid::Uuid::new_v4()));
+    let dist_dir = base.join("dist");
+    let tiles_dir = base.join("tiles");
+    let data_dir = base.join("data");
+    std::fs::create_dir_all(&dist_dir).unwrap();
+    std::fs::create_dir_all(&tiles_dir).unwrap();
+    std::fs::create_dir_all(&data_dir).unwrap();
+    std::fs::write(
+        data_dir.join("trailer1.json"),
+        r#"[{"id":"t1","title":"Vice Beach Shot"}]"#,
+    )
+    .unwrap();
+
+    let app = test_app_with_dirs(dist_dir, tiles_dir, data_dir);
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/get-media-files.php?action=tabs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let tabs = body_json(res).await;
+    assert!(!tabs["tabs"].as_array().unwrap().is_empty());
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/get-media-files.php?type=trailer1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let files = body_json(res).await;
+    assert_eq!(files["files"][0]["id"], "t1");
+
+    let res = app
+        .clone()
+        .oneshot(
+            Request::get("/get-media-files.php?type=badtype")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+    let res = app
+        .oneshot(
+            Request::get("/data/trailer1.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let raw = body_json(res).await;
+    assert_eq!(raw[0]["title"], "Vice Beach Shot");
 
     let _ = std::fs::remove_dir_all(&base);
 }

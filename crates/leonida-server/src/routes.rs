@@ -19,6 +19,7 @@ use crate::db::{
     MARKERS_SCHEMA,
 };
 use crate::error::AppError;
+use crate::sol::{auth_api, get_media_files, submit_challenge};
 use crate::state::AppState;
 
 pub fn build_router(state: AppState) -> Router {
@@ -28,6 +29,7 @@ pub fn build_router(state: AppState) -> Router {
             HeaderValue::from_static("public, max-age=86400"),
         ),
     );
+    let data_service = ServeDir::new(&state.data_dir);
 
     let dist_service = ServeDir::new(&state.dist_dir).append_index_html_on_directories(true);
 
@@ -51,7 +53,11 @@ pub fn build_router(state: AppState) -> Router {
             "/api/markers/{id}",
             put(update_marker).delete(delete_marker),
         )
+        .route("/auth/api.php", get(auth_api).post(auth_api))
+        .route("/api/sol/challenge/submit", post(submit_challenge))
+        .route("/get-media-files.php", get(get_media_files))
         .nest_service("/tiles", tiles_service)
+        .nest_service("/data", data_service)
         .fallback_service(dist_service)
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

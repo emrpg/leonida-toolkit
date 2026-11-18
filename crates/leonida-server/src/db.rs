@@ -87,9 +87,48 @@ impl MarkerStore {
                  y REAL NOT NULL,
                  note TEXT,
                  created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sol_leaderboard (
+                 id TEXT PRIMARY KEY,
+                 game TEXT NOT NULL,
+                 player TEXT NOT NULL,
+                 entry_id TEXT,
+                 score INTEGER NOT NULL,
+                 distance_m REAL NOT NULL,
+                 grade TEXT NOT NULL,
+                 guess_x REAL NOT NULL,
+                 guess_y REAL NOT NULL,
+                 target_x REAL NOT NULL,
+                 target_y REAL NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_sol_leaderboard_game_score
+                 ON sol_leaderboard (game, score DESC, distance_m ASC, created_at ASC);
+             CREATE TABLE IF NOT EXISTS sol_notifications (
+                 id TEXT PRIMARY KEY,
+                 title TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 read INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL
              );",
         )
-        .context("initialize user_markers schema")?;
+        .context("initialize sqlite schema")?;
+
+        let notif_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM sol_notifications", [], |r| r.get(0))?;
+        if notif_count == 0 {
+            conn.execute(
+                "INSERT INTO sol_notifications (id, title, body, read, created_at)
+                 VALUES (?1, ?2, ?3, 0, ?4)",
+                params![
+                    "welcome-v03",
+                    "State of Leonida v0.3",
+                    "Interactive map, media archive, and Screenshot Challenge are live.",
+                    now_unix_millis()
+                ],
+            )?;
+        }
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -234,6 +273,186 @@ impl MarkerStore {
         tx.commit()?;
         Ok(imported)
     }
+
+    pub fn list_notifications(&self) -> Result<Vec<SolNotification>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, title, body, read, created_at FROM sol_notifications ORDER BY created_at DESC, rowid DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let read_int: i64 = row.get(3)?;
+            Ok(SolNotification {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                body: row.get(2)?,
+                read: read_int != 0,
+                created_at: row.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn mark_notifications_read(&self, id: Option<&str>) -> Result<usize> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let updated = match id {
+            Some(target_id) => conn.execute(
+                "UPDATE sol_notifications SET read = 1 WHERE id = ?1 AND read = 0",
+                params![target_id],
+            )?,
+            None => conn.execute("UPDATE sol_notifications SET read = 1 WHERE read = 0", [])?,
+        };
+        Ok(updated)
+    }
+
+    pub fn record_challenge_score(&self, entry: NewLeaderboardEntry) -> Result<LeaderboardEntry> {
+        let item = LeaderboardEntry {
+            id: Uuid::new_v4().to_string(),
+            game: entry.game,
+            player: entry.player,
+            entry_id: entry.entry_id,
+            score: entry.score,
+            distance_m: entry.distance_m,
+            grade: entry.grade,
+            guess_x: entry.guess_x,
+            guess_y: entry.guess_y,
+            target_x: entry.target_x,
+            target_y: entry.target_y,
+            created_at: now_unix_millis(),
+        };
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        conn.execute(
+            "INSERT INTO sol_leaderboard (
+                 id, game, player, entry_id, score, distance_m, grade,
+                 guess_x, guess_y, target_x, target_y, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                item.id,
+                item.game,
+                item.player,
+                item.entry_id,
+                item.score,
+                item.distance_m,
+                item.grade,
+                item.guess_x,
+                item.guess_y,
+                item.target_x,
+                item.target_y,
+                item.created_at
+            ],
+        )?;
+        Ok(item)
+    }
+
+    pub fn leaderboard(&self, game: &str, limit: usize) -> Result<Vec<LeaderboardEntry>> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let mut stmt = conn.prepare(
+            "SELECT id, game, player, entry_id, score, distance_m, grade,
+                    guess_x, guess_y, target_x, target_y, created_at
+             FROM sol_leaderboard
+             WHERE game = ?1
+             ORDER BY score DESC, distance_m ASC, created_at ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![game, limit as i64], |row| {
+            Ok(LeaderboardEntry {
+                id: row.get(0)?,
+                game: row.get(1)?,
+                player: row.get(2)?,
+                entry_id: row.get(3)?,
+                score: row.get(4)?,
+                distance_m: row.get(5)?,
+                grade: row.get(6)?,
+                guess_x: row.get(7)?,
+                guess_y: row.get(8)?,
+                target_x: row.get(9)?,
+                target_y: row.get(10)?,
+                created_at: row.get(11)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn game_stats(&self, game: &str) -> Result<SolGameStats> {
+        let conn = self.conn.lock().expect("marker db mutex poisoned");
+        let (total_plays, best_score, avg_score, avg_distance_m): (
+            i64,
+            Option<i64>,
+            Option<f64>,
+            Option<f64>,
+        ) = conn.query_row(
+            "SELECT COUNT(*), MAX(score), AVG(score), AVG(distance_m)
+             FROM sol_leaderboard WHERE game = ?1",
+            params![game],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        Ok(SolGameStats {
+            game: game.to_string(),
+            total_plays: total_plays.max(0) as usize,
+            best_score: best_score.unwrap_or(0),
+            avg_score: avg_score.unwrap_or(0.0),
+            avg_distance_m: avg_distance_m.unwrap_or(0.0),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolNotification {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub read: bool,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewLeaderboardEntry {
+    pub game: String,
+    pub player: String,
+    pub entry_id: Option<String>,
+    pub score: i64,
+    pub distance_m: f64,
+    pub grade: String,
+    pub guess_x: f64,
+    pub guess_y: f64,
+    pub target_x: f64,
+    pub target_y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LeaderboardEntry {
+    pub id: String,
+    pub game: String,
+    pub player: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_id: Option<String>,
+    pub score: i64,
+    pub distance_m: f64,
+    pub grade: String,
+    pub guess_x: f64,
+    pub guess_y: f64,
+    pub target_x: f64,
+    pub target_y: f64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolGameStats {
+    pub game: String,
+    pub total_plays: usize,
+    pub best_score: i64,
+    pub avg_score: f64,
+    pub avg_distance_m: f64,
 }
 
 fn normalize_marker(input: CreateMarkerInput) -> UserMarker {

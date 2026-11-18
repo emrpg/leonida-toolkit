@@ -13,4 +13,5 @@ pub struct AppState {
     pub tile_manifest: Arc<Value>,
     pub dist_dir: PathBuf,
     pub tiles_dir: PathBuf,
+    pub data_dir: PathBuf,
 }
