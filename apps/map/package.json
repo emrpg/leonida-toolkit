@@ -10,7 +10,6 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@leonida/core": "0.1.0",
     "leaflet": "^1.9.4"
   },
   "devDependencies": {
